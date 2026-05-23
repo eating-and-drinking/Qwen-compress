@@ -342,6 +342,19 @@ If this code helps your work, please cite:
 }
 ```
 
+The distillation algorithm builds on a forthcoming patent on group-wise distillation; the pruning stage implements Frantar & Alistarh, *"SparseGPT: Massive Language Models Can Be Accurately Pruned in One-Shot"* (ICML 2023).
+
+## Contributing
+
+1. Fork and create a topic branch.
+2. `pip install -e ".[dev]"` then `pre-commit install`.
+3. Add tests under `tests/`.
+4. `pytest -q && ruff check src tests` should pass.
+5. Open a PR.
+
+## Author
+
+Created and maintained by [eating-and-dr
 The distillation algorithm builds on a forthcoming patent on group-wise distillation; the pruning stage implements Frantar & Alistarh, *"SparseGPT: Massive Language Models Can Be Accurately Pruned in One-Shot"* (ICML 2023). The channel-permutation pass follows Pool & Yu, *"Channel Permutations for N:M Sparsity"* (NeurIPS 2021).
 
 ## Contributing
@@ -354,7 +367,7 @@ The distillation algorithm builds on a forthcoming patent on group-wise distilla
 
 ## Author
 
-Created and maintained by [eatingCreated and maintained by [eating-and-drinking](https://github.com/eating-and-drinking).
+Created and maintained by [eating-and-drinking](https://github.com/eating-and-drinking).
 
 Repository: [https://github.com/eating-and-drinking/Qwen-compress](https://github.com/eating-and-drinking/Qwen-compress)
 
