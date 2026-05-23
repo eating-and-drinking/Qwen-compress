@@ -1,0 +1,65 @@
+# Stage 2 (variant): SparseGPT 非结构化剪枝 + 通道置换到 2:4 结构化
+#
+# 流程：
+#   1. 跑标准 SparseGPT 非结构化剪枝（精度上限）
+#   2. 对每个 MLP block 搜索 intermediate 维度的最佳列置换
+#   3. 应用置换（gate/up 行 + down 列），在 down_proj 上落到 2:4 网格
+#   4. 硬剪未对齐的零（恢复 100% 严格 2:4 约束）
+#   5. 短时间恢复微调
+#
+# 收益：精度逼近非结构化（损失 ~0.1-0.2 PPL），同时 down_proj 可用 cuSPARSELt
+# Tensor Core 加速（约 1.5x）。是当前精度-速度 Pareto 前沿上的最佳点。
+
+stage: prune
+
+model_name_or_path: ./checkpoints/distill/final
+output_dir: ./checkpoints/prune-perm-2-4
+
+# Step 1: 标准非结构化剪枝
+sparsity: 0.5
+sparsity_type: unstructured
+block_size: 128
+percdamp: 0.01
+
+calibration_path: ./data/cot_sft_120k.jsonl
+nsamples: 128
+max_seq_length: 2048
+seed: 42
+device: cuda
+
+# Step 2-4: 通道置换 + 硬强制 2:4
+permutation:
+  enabled: true
+  target: "2:4"
+  algorithm: greedy
+  max_iters: 300
+  swaps_per_iter: 200
+  patience: 30
+  enforce_after: true     # 硬剪未对齐的零，得到严格 2:4 网格
+  seed: 0
+
+# Step 5: 恢复微调（mask 在置换+硬剪之后捕获，所以保护的是 2:4 模式）
+recovery_finetune: true
+recovery:
+  output_dir: ./checkpoints/prune-perm-2-4/recovery
+  num_train_epochs: 0.3
+  max_steps: -1
+  gradient_checkpointing: true
+  max_grad_norm: 1.0
+  bf16: true
+  fp16: false
+  save_steps: 200
+  eval_steps: 200
+  logging_steps: 10
+  save_total_limit: 2
+  seed: 42
+  optimizer:
+    name: adamw
+    lr: 2.0e-5
+    betas: [0.9, 0.95]
+    weight_decay: 0.0
+    eps: 1.0e-8
+  scheduler:
+    name: cosine_with_warmup
+    warmup_ratio: 0.05
+    min_lr_ratio: 0.1

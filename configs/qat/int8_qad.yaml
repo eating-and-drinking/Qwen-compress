@@ -1,0 +1,68 @@
+# Stage 3: INT8 QAT with QAD (Quantization-Aware Distillation) from the
+# Qwen2.5-14B-Instruct teacher. The student is the pruned+recovered model from
+# stage 2.
+
+stage: qat
+
+model_name_or_path: ./checkpoints/prune/recovered/final
+teacher_model_name_or_path: Qwen/Qwen2.5-14B-Instruct
+
+weight_bits: 8
+activation_bits: 8
+weight_granularity: per_channel
+activation_granularity: per_tensor
+weight_symmetric: true
+activation_symmetric: false
+quantize_kv_cache: true              # critical for end-to-end INT8 inference
+quantize_lm_head: false
+skip_layers: [lm_head, embed_tokens]
+
+calibration_path: ./data/cot_sft_120k.jsonl
+nsamples_calib: 512
+calibration_method: percentile
+percentile: 99.99
+
+# QAD weights — leans on KD loss to recover quantization-induced perplexity.
+use_qad: true
+alpha_ce: 0.5
+beta_kd: 1.0
+gamma_hidden: 0.5
+kd_temperature: 2.0
+
+export_format: safetensors           # or "onnx" for QDQ graph
+
+# 注：如果输入模型来自剪枝阶段（已有 2:4 零模式），QAT 训练器会自动
+# 在每次 optimizer.step() 之后用硬投影把零位置压回零，避免梯度填回非零。
+
+data:
+  train_path: ./data/cot_sft_120k.jsonl
+  max_seq_length: 2048
+  batch_size: 2
+  gradient_accumulation_steps: 8
+  num_workers: 4
+  shuffle_seed: 42
+  cot_mode: dual
+
+training:
+  output_dir: ./checkpoints/qat
+  num_train_epochs: 0.5
+  max_steps: -1
+  gradient_checkpointing: true
+  max_grad_norm: 1.0
+  bf16: true
+  fp16: false
+  save_steps: 200
+  eval_steps: 200
+  logging_steps: 10
+  save_total_limit: 2
+  seed: 42
+  optimizer:
+    name: adamw
+    lr: 2.0e-5                       # 5-10x smaller than distillation LR
+    betas: [0.9, 0.95]
+    weight_decay: 0.0
+    eps: 1.0e-8
+  scheduler:
+    name: cosine_with_warmup
+    warmup_ratio: 0.05
+    min_lr_ratio: 0.1
