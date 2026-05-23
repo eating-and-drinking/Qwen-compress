@@ -230,13 +230,6 @@ Channel permutation for 2:4 alignment across 36 blocks (enforce=True)
   layer  2: alignment 49.9% → 96.7% (misalign 101803 → 7521 → 0 after enforce)
   ...
 ```
-
-### References
-
-- Pool & Yu, *"Channel Permutations for N:M Sparsity"*, NeurIPS 2021 — original idea of permutation-as-alignment.
-- Mishra et al., *"Accelerating Sparse Deep Neural Networks"*, 2021 — the 2:4 hardware support spec underlying cuSPARSELt.
-- Frantar & Alistarh, *"SparseGPT"*, ICML 2023 — the unstructured pruning we run in step 1.
-
 ## Configuration Reference
 
 Each stage is driven by a single YAML file validated by pydantic. See `src/qwen_compress/utils/config.py` for the full schema. Key knobs:
@@ -341,9 +334,6 @@ If this code helps your work, please cite:
   url    = {https://github.com/eating-and-drinking/Qwen-compress},
 }
 ```
-
-The distillation algorithm builds on a forthcoming patent on group-wise distillation; the pruning stage implements Frantar & Alistarh, *"SparseGPT: Massive Language Models Can Be Accurately Pruned in One-Shot"* (ICML 2023). The channel-permutation pass follows Pool & Yu, *"Channel Permutations for N:M Sparsity"* (NeurIPS 2021).
-
 ## Contributing
 
 1. Fork and create a topic branch.
@@ -361,5 +351,3 @@ Repository: [https://github.com/eating-and-drinking/Qwen-compress](https://githu
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE). Includes an express patent grant.
-
-Qwen is a trademark of Alibaba Group. This project is not affiliated with or endorsed by Alibaba.
