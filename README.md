@@ -344,7 +344,7 @@ If this code helps your work, please cite:
 
 ## Author
 
-Created and maintained by [eatingCreated and maintained by [eating-and-drinking](https://github.com/eating-and-drinking).
+Created and maintained by [eating-and-drinking](https://github.com/eating-and-drinking).
 
 Repository: [https://github.com/eating-and-drinking/Qwen-compress](https://github.com/eating-and-drinking/Qwen-compress)
 
