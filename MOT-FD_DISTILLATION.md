@@ -480,7 +480,7 @@ class _LayerOutputCapture:
 
 ---
 
-## MOT-FD 的优势
+## MOT-FD的优势
 
 | 传统蒸馏 | MOT-FD |
 |---------|--------|
