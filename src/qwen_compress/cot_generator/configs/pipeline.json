@@ -1,0 +1,44 @@
+{
+  "_comment": "CoT Generator Pipeline 配置文件",
+
+  "output_dir": "outputs/cot_dataset",
+  "target_total": 120000,
+  "self_instruct_count": 35000,
+  "cot_mix_ratio": 0.7,
+  "enable_cross_validation": false,
+  "flush_every": 500,
+
+  "generator": {
+    "model_name": "Qwen/Qwen2.5-14B-Instruct",
+    "tensor_parallel_size": 2,
+    "gpu_memory_utilization": 0.90,
+    "max_model_len": 4096,
+    "enable_prefix_caching": true,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "max_tokens": 1024,
+    "batch_size": 64,
+    "min_thinking_length": 100,
+    "required_steps": ["步骤1", "步骤2", "步骤3"]
+  },
+
+  "data_sources": {
+    "hf_sources": {
+      "math":    7500,
+      "logiqa":  5000,
+      "ceval":   15000,
+      "mbpp":    8000
+    },
+    "local_sources": [
+      {
+        "_comment": "种子问题文件",
+        "path": "data/seeds/custom_math.jsonl",
+        "domain": "math"
+      },
+      {
+        "path": "data/seeds/custom_logic.jsonl",
+        "domain": "logic"
+      }
+    ]
+  }
+}

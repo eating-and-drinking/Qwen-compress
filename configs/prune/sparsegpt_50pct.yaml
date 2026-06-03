@@ -14,7 +14,7 @@ percdamp: 0.01
 
 # Calibration uses the same SFT data used for distillation, so the activation
 # distribution matches deployment.
-calibration_path: ./data/cot_sft_120k.jsonl
+calibration_path: ./data/cot_sft_train.jsonl
 nsamples: 128
 max_seq_length: 2048
 seed: 42

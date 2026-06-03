@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import shutil
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -208,6 +209,27 @@ class GroupwiseDistillTrainer:
             pin_memory=True,
             drop_last=True,
         )
+
+        # ---- Validation Data --------------------------------------------
+        self.eval_loader: Optional[DataLoader] = None
+        if config.data.eval_path:
+            eval_ds = CoTDataset(
+                path=config.data.eval_path,
+                tokenizer=self.tokenizer,
+                max_seq_length=config.data.max_seq_length,
+                mode=config.data.cot_mode,
+                seed=config.data.shuffle_seed,
+            )
+            self.eval_loader = DataLoader(
+                eval_ds,
+                batch_size=config.data.batch_size,
+                shuffle=False,
+                num_workers=min(1, config.data.num_workers),
+                collate_fn=collator,
+                pin_memory=True,
+                drop_last=False,
+            )
+            _logger.info(f"Loaded validation dataset with {len(eval_ds)} examples")
 
         # ---- Optimizer / Scheduler ---------------------------------------
         student_params = [p for p in self.student.parameters() if p.requires_grad]
@@ -429,6 +451,60 @@ class GroupwiseDistillTrainer:
         )
 
     # ======================================================================
+    # Evaluation
+    # ======================================================================
+
+    def evaluate(self) -> Dict[str, float]:
+        """Evaluate the student model on the validation dataset.
+
+        Returns
+        -------
+        Dictionary containing validation loss and breakdown metrics.
+        """
+        if self.eval_loader is None:
+            _logger.warning("No evaluation dataset configured. Skipping evaluation.")
+            return {}
+
+        self.student.eval()
+        self.loss_fn.eval()
+
+        total_loss: Dict[str, float] = {}
+        count = 0
+
+        device = next(self.student.parameters()).device
+
+        with torch.no_grad():
+            for batch in self.eval_loader:
+                with self._autocast():
+                    s_logits, t_logits, s_hidden = self._forward_pair(batch)
+                    labels = batch["labels"].to(device)
+                    attention_mask = batch["attention_mask"].to(device)
+
+                    loss_out = self.loss_fn(
+                        student_logits=s_logits,
+                        teacher_logits=t_logits,
+                        labels=labels,
+                        attention_mask=attention_mask,
+                        student_hidden_states=s_hidden,
+                        teacher_hidden_states=None,
+                    )
+
+                    for k, v in loss_out.to_log_dict().items():
+                        total_loss[k] = total_loss.get(k, 0.0) + v
+                    count += 1
+
+        self.student.train()
+        self.loss_fn.train()
+
+        if count > 0:
+            avg_loss = {k: v / count for k, v in total_loss.items()}
+            _logger.info(
+                "Evaluation complete | " + " ".join(f"{k}={v:.4f}" for k, v in avg_loss.items())
+            )
+            return avg_loss
+        return {}
+
+    # ======================================================================
     # Training loop
     # ======================================================================
 
@@ -454,6 +530,10 @@ class GroupwiseDistillTrainer:
             f"num_groups={self.assignment.num_groups}, "
             f"student_layers_captured={len(self._student_captures)}"
         )
+
+        # Track best model based on validation loss
+        best_val_loss: Optional[float] = None
+        best_step: int = 0
 
         while global_step < self.total_steps:
             for batch in self.train_loader:
@@ -515,17 +595,50 @@ class GroupwiseDistillTrainer:
                         )
                         running_loss.clear()
 
+                    # Save intermediate checkpoints only if save_total_limit > 0
                     if (
                         global_step % cfg.training.save_steps == 0
                         and is_main_process()
+                        and cfg.training.save_total_limit > 0
                     ):
                         self._save(output_dir, f"step-{global_step}")
                         rotate_checkpoints(
                             output_dir, keep=cfg.training.save_total_limit, prefix="step-"
                         )
 
-        # Final save.
-        final_path = self._save(output_dir, "final")
+                    if (
+                        global_step % cfg.training.eval_steps == 0
+                        and is_main_process()
+                    ):
+                        eval_metrics = self.evaluate()
+                        # Track best model based on validation total loss
+                        if eval_metrics and "total" in eval_metrics:
+                            current_val_loss = eval_metrics["total"]
+                            if best_val_loss is None or current_val_loss < best_val_loss:
+                                best_val_loss = current_val_loss
+                                best_step = global_step
+                                self._save(output_dir, "best")
+                                _logger.info(
+                                    f"New best model at step {global_step}: val_loss={current_val_loss:.4f}"
+                                )
+
+        # Final save: use best model if available, otherwise use last model
+        if best_val_loss is not None:
+            _logger.info(
+                f"Using best model from step {best_step} (val_loss={best_val_loss:.4f}) as final model"
+            )
+            # Copy best to final
+            best_path = output_dir / "best"
+            final_path = output_dir / "final"
+            if best_path.exists():
+                if final_path.exists():
+                    shutil.rmtree(final_path)
+                shutil.copytree(best_path, final_path)
+            else:
+                final_path = self._save(output_dir, "final")
+        else:
+            final_path = self._save(output_dir, "final")
+        
         self._detach_hooks()
         _logger.info(f"MOT-FD distillation complete. Final checkpoint: {final_path}")
         return final_path

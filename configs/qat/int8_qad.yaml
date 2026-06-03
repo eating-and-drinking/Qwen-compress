@@ -17,7 +17,7 @@ quantize_kv_cache: true              # critical for end-to-end INT8 inference
 quantize_lm_head: false
 skip_layers: [lm_head, embed_tokens]
 
-calibration_path: ./data/cot_sft_120k.jsonl
+calibration_path: ./data/cot_sft_train.jsonl
 nsamples_calib: 512
 calibration_method: percentile
 percentile: 99.99
@@ -35,7 +35,7 @@ export_format: safetensors           # or "onnx" for QDQ graph
 # 在每次 optimizer.step() 之后用硬投影把零位置压回零，避免梯度填回非零。
 
 data:
-  train_path: ./data/cot_sft_120k.jsonl
+  train_path: ./data/cot_sft_train.jsonl
   max_seq_length: 2048
   batch_size: 2
   gradient_accumulation_steps: 8

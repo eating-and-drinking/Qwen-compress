@@ -41,7 +41,7 @@ freeze_embedding: false
 projector_lr_multiplier: 0.1      # projector LR = base LR × this value
 
 data:
-  train_path: ./data/cot_sft_120k.jsonl
+  train_path: ./data/cot_sft_train.jsonl
   eval_path: ./data/cot_eval.jsonl
   max_seq_length: 4096
   batch_size: 2

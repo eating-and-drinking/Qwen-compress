@@ -1,0 +1,6 @@
+{"id": "seed_math_001", "question": "小明有15个苹果，给了小红三分之一，又买了8个，现在他有多少个苹果？", "domain": "math"}
+{"id": "seed_math_002", "question": "一列火车以每小时90公里的速度行驶，从A城到B城需要2.5小时，A城到B城的距离是多少公里？", "domain": "math"}
+{"id": "seed_logic_001", "question": "所有的猫都是动物，Tom是一只猫，请问Tom是动物吗？请说明推理过程。", "domain": "logic"}
+{"id": "seed_logic_002", "question": "如果下雨，地面会湿。现在地面是湿的，能否得出正在下雨的结论？", "domain": "logic"}
+{"id": "seed_code_001", "question": "以下Python代码的输出是什么？\nx = [1, 2, 3]\ny = x\ny.append(4)\nprint(x)", "domain": "code"}
+{"id": "seed_common_001", "question": "为什么冬天的白天比夏天短？", "domain": "common_sense"}

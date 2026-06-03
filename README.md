@@ -1,7 +1,7 @@
 # qwen-compress
 
 Production-grade LLM compression toolkit for the Qwen family of models.
-Three composable stages — **MOT-FD Distillation → SparseGPT Pruning → INT8 QAT/QAD** — that take a 14B-class teacher down to a 3B INT8 student suitable for edge deployment, while preserving chain-of-thought reasoning quality.
+Three composable stages �?**MOT-FD Distillation �?SparseGPT Pruning �?INT8 QAT/QAD** �?that take a 14B-class teacher down to a 3B INT8 student suitable for edge deployment, while preserving chain-of-thought reasoning quality.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org)
@@ -15,7 +15,7 @@ English
 
 - **MOT-FD distillation.** Monotonic Optimal Transport Functional Distillation: decomposes the 48-layer teacher into 12 functional groups via change-point detection on representation dynamics, then aligns the 36-layer student using Sinkhorn optimal transport with a monotonic semantic-progression constraint. Outperforms naive layer-matching strategies when the teacher is much deeper than the student.
 - **SparseGPT pruning.** Block-by-block one-shot pruning with damped Hessian inversion. Supports unstructured, 2:4, and 4:8 patterns. Memory peaks at one decoder block.
-- **Channel permutation for 2:4** (`prune.permutation.enabled: true`). Prune unstructured for max accuracy, then search a column permutation that snaps the existing zeros onto a 2:4 grid, then hard-enforce the residual. Yields ~unstructured accuracy with 2:4 hardware speedup — currently the Pareto frontier on Ampere/Hopper Tensor Cores and our CPU 2:4 kernel.
+- **Channel permutation for 2:4** (`prune.permutation.enabled: true`). Prune unstructured for max accuracy, then search a column permutation that snaps the existing zeros onto a 2:4 grid, then hard-enforce the residual. Yields ~unstructured accuracy with 2:4 hardware speedup �?currently the Pareto frontier on Ampere/Hopper Tensor Cores and our CPU 2:4 kernel.
 - **QAT with optional QAD.** Drop-in `FakeQuantize` modules, per-channel weight + per-tensor (or per-token) activation quantization, learnable scales via LSQ, KV-cache quantization for end-to-end INT8 inference, and quantization-aware distillation that re-uses the same teacher to recover quantization-induced perplexity.
 - **Mask-preserving recovery fine-tuning** between pruning and QAT, so sparsity isn't lost to subsequent training.
 - **CoT-friendly SFT loader** with three modes (`direct` / `cot` / `dual`) that lets the student keep its reasoning ability after compression.
@@ -25,31 +25,14 @@ English
 ## Architecture
 
 ```
-┌────────────────────┐     stage 1: MOT-FD distill   ┌────────────────────┐
-│ Qwen2.5-14B-Inst.  │  ──────────────────────────▶  │   Qwen2.5-3B       │
-│  (teacher, frozen) │   48→12 groups, OT align,     │  (student, FP16)   │
-│                    │   monotonic constraint         │                    │
-└────────────────────┘                               └─────────┬──────────┘
-                                                               │
-                                              stage 2: SparseGPT prune
-                                                               │
-                                            ┌──────────────────▼───────────┐
-                                            │  3B @ 50% unstructured        │
-                                            │   + mask-preserving FT        │
-                                            └──────────────────┬────────────┘
-                                                               │
-                                       stage 3: INT8 QAT + QAD
+┌────────────────────�?    stage 1: MOT-FD distill   ┌────────────────────�?�?Qwen2.5-14B-Inst.  �? ──────────────────────────�? �?  Qwen2.5-3B       �?�? (teacher, frozen) �?  48�?2 groups, OT align,     �? (student, FP16)   �?�?                   �?  monotonic constraint         �?                   �?└────────────────────�?                              └─────────┬──────────�?                                                               �?                                              stage 2: SparseGPT prune
+                                                               �?                                            ┌──────────────────▼───────────�?                                            �? 3B @ 50% unstructured        �?                                            �?  + mask-preserving FT        �?                                            └──────────────────┬────────────�?                                                               �?                                       stage 3: INT8 QAT + QAD
                                        (re-using the 14B teacher)
-                                                               │
-                                            ┌──────────────────▼───────────┐
-                                            │ 3B INT8 (W8A8 + KV-cache)    │
-                                            │   safetensors / ONNX         │
-                                            └──────────────────────────────┘
-```
+                                                               �?                                            ┌──────────────────▼───────────�?                                            �?3B INT8 (W8A8 + KV-cache)    �?                                            �?  safetensors / ONNX         �?                                            └──────────────────────────────�?```
 
 ## Algorithm: MOT-FD
 
-### 1. Teacher Functional Decomposition (48 → 12 Groups)
+### 1. Teacher Functional Decomposition (48 �?12 Groups)
 
 For each teacher layer l, extract the mean representation z_l^T = E_{x~D}[h_l^T(x)]. Then compute a representation dynamics energy signal:
 
@@ -60,19 +43,19 @@ E(l) = α·||z_{l+1} - z_l|| + β·||z_{l+1} - 2z_l + z_{l-1}|| + γ·(1 - cos(z
 Detect 11 change points (breakpoints) via peak detection on E(l), and construct 12 non-uniform functional groups G_k = [b_{k-1}, b_k). Each group is summarized as g_k^T = mean(G_k^T).
 
 **Interpretation:**
-- Early groups → syntax / token formation
-- Middle groups → semantic integration
-- Late groups → reasoning + alignment
+- Early groups �?syntax / token formation
+- Middle groups �?semantic integration
+- Late groups �?reasoning + alignment
 
 ### 2. Student Representation Manifold
 
-The student produces 36 layer hidden states H^S = {h_1^S, ..., h_36^S}. No explicit grouping is imposed — the student remains a continuous representation manifold.
+The student produces 36 layer hidden states H^S = {h_1^S, ..., h_36^S}. No explicit grouping is imposed �?the student remains a continuous representation manifold.
 
 ### 3. Optimal Transport Alignment
 
 A cost matrix C_{l,k} = ||h_l^S - g_k^T||^2 is built between all student layers and teacher group representations. The Sinkhorn algorithm solves for an entropy-regularized transport plan γ* that minimizes Σ γ_{l,k} C_{l,k} subject to marginal constraints.
 
-A **monotonic constraint** ensures semantic order is preserved: l_1 < l_2 ⇒ E_γ[k|l_1] ≤ E_γ[k|l_2]. This prevents "semantic backtracking" in student depth.
+A **monotonic constraint** ensures semantic order is preserved: l_1 < l_2 �?E_γ[k|l_1] �?E_γ[k|l_2]. This prevents "semantic backtracking" in student depth.
 
 ### 4. Composite Loss
 
@@ -82,8 +65,8 @@ L = L_CE + λ_KD·L_KD + λ_OT·L_OT + λ_mono·L_mono
 
 - **L_CE**: Standard next-token prediction cross-entropy.
 - **L_KD**: KL-divergence between student and teacher logits.
-- **L_OT**: Σ γ_{l,k} C_{l,k} — the optimal transport alignment cost.
-- **L_mono**: Σ_l max(0, μ_l - μ_{l+1}) — monotonic regularization where μ_l is the expected functional position of student layer l.
+- **L_OT**: Σ γ_{l,k} C_{l,k} �?the optimal transport alignment cost.
+- **L_mono**: Σ_l max(0, μ_l - μ_{l+1}) �?monotonic regularization where μ_l is the expected functional position of student layer l.
 
 ## Installation
 
@@ -98,7 +81,7 @@ pip install -e ".[dev]"
 pip install -e ".[all]"
 ```
 
-Requires Python ≥ 3.9, PyTorch ≥ 2.1, CUDA ≥ 11.8 (for flash-attention 2 you'll also want CUDA 12.x).
+Requires Python �?3.9, PyTorch �?2.1, CUDA �?11.8 (for flash-attention 2 you'll also want CUDA 12.x).
 
 ## Quick Start
 
@@ -151,19 +134,19 @@ All stages expect chain-of-thought SFT data as JSONL, one example per line:
 
 The `dual` CoT mode (default) alternates between `direct` (answer only) and `cot` (`<think>...</think>` + answer) targets per example, so the student learns both fast and reasoned outputs.
 
-## Sparsity Strategies: Unstructured → Permuted 2:4
+## Sparsity Strategies: Unstructured �?Permuted 2:4
 
 The pruning stage exposes three sparsity patterns, each at a different point on the accuracy/speed Pareto frontier.
 
-| Pattern | Δ PPL (3B, MMLU) | Hardware acceleration | When to use |
+| Pattern | Δ PPL (3B) | Hardware acceleration | When to use |
 |---|---:|---|---|
 | Unstructured 50%      | ~0.4 | None (storage only)                          | Memory-constrained, no sparse hardware |
-| Naïve 2:4             | 1.0 – 1.5 | cuSPARSELt (~1.5×) Ampere/Hopper, custom CPU | 2:4 hardware available, accuracy hit OK |
-| **Permuted 2:4** ⭐    | ~0.6 | Same as naïve 2:4                            | **Best of both worlds — current Pareto frontier** |
+| Naïve 2:4             | 1.0 �?1.5 | cuSPARSELt (~1.5×) Ampere/Hopper, custom CPU | 2:4 hardware available, accuracy hit OK |
+| **Permuted 2:4** �?   | ~0.6 | Same as naïve 2:4                            | **Best of both worlds �?current Pareto frontier** |
 
 ### Why naïve 2:4 hurts
 
-A `2:4` constraint says: *every 4 consecutive columns must contain exactly 2 zeros*. This is a strong **positional** constraint — it doesn't care which 2 values are largest, only that they land in the right slots. When forced onto a weight matrix whose natural sparsity pattern is misaligned, it ends up zeroing values that should have been kept (and keeping values that should have been zeroed). Empirically, this costs ~1.0 PPL on Qwen2.5-3B vs. a 50% unstructured mask of the same row.
+A `2:4` constraint says: *every 4 consecutive columns must contain exactly 2 zeros*. This is a strong **positional** constraint �?it doesn't care which 2 values are largest, only that they land in the right slots. When forced onto a weight matrix whose natural sparsity pattern is misaligned, it ends up zeroing values that should have been kept (and keeping values that should have been zeroed). Empirically, this costs ~1.0 PPL on Qwen2.5-3B vs. a 50% unstructured mask of the same row.
 
 ### The geometric insight: column permutation is a free variable
 
@@ -171,50 +154,48 @@ A linear layer is permutation-equivariant on its **input channel axis**:
 
 ```
 y = W x                       (W shape [out, in], x shape [in])
-y = W P P⁻¹ x  =  W' x'       (P is any permutation matrix on `in`)
+y = W P P⁻�?x  =  W' x'       (P is any permutation matrix on `in`)
 
-where  W' = W P    and    x' = P⁻¹ x
+where  W' = W P    and    x' = P⁻�?x
 ```
 
 You can freely reorder W's columns **as long as you reorder x the same way**. So if we permute one layer's input channels, we must permute the **previous layer's outputs** to match. For the MLP block in a Qwen2.5 decoder:
 
 ```
-  hidden ──▶ gate_proj ──┐
-                          ├──▶ SwiGLU ──▶ down_proj ──▶ hidden
-  hidden ──▶ up_proj   ──┘
-```
+  hidden ──�?gate_proj ──�?                          ├──�?SwiGLU ──�?down_proj ──�?hidden
+  hidden ──�?up_proj   ──�?```
 
 Permuting the `intermediate` dimension is network-equivariant if we permute, by the same `π`:
 
 - the **rows** of `gate_proj.weight` and `up_proj.weight`, AND
 - the **columns** of `down_proj.weight`
 
-The block computes the *same function* — only the internal channel ordering changes. This is implemented in `apply_intermediate_permutation()` in `src/qwen_compress/prune/permutation.py`.
+The block computes the *same function* �?only the internal channel ordering changes. This is implemented in `apply_intermediate_permutation()` in `src/qwen_compress/prune/permutation.py`.
 
 For attention blocks, the per-head structure makes the equivalent rewrite less clean (heads are independent groups of channels), so we currently restrict the permutation pass to MLP blocks. SparseGPT is run on attention layers normally, but the 2:4 alignment cost there is small because attention matrices are typically smaller than MLPs.
 
 ### The algorithm
 
-1. **Step 1 — Unstructured SparseGPT.** Run pruning with `sparsity_type: unstructured` to get the max-quality 50% mask. This sets the accuracy ceiling.
+1. **Step 1 �?Unstructured SparseGPT.** Run pruning with `sparsity_type: unstructured` to get the max-quality 50% mask. This sets the accuracy ceiling.
 
-2. **Step 2 — Greedy column-swap search.** For each decoder block, find the permutation `π` of the `intermediate` axis that pushes as many existing zeros as possible into 2:4-aligned positions. The search is implemented in `PermutationSearcher`:
+2. **Step 2 �?Greedy column-swap search.** For each decoder block, find the permutation `π` of the `intermediate` axis that pushes as many existing zeros as possible into 2:4-aligned positions. The search is implemented in `PermutationSearcher`:
    - **Cost function:** count of (row × group) pairs that don't yet have exactly 2 zeros out of 4 (the residual misalignment).
    - **Sampling:** swap candidates are biased toward groups with high misalignment (avoid wasting steps on already-aligned groups).
-   - **Acceptance:** greedy — only swaps that strictly decrease cost are kept.
-   - **Cost:** typically 0.1 – 2 seconds per layer on a single CPU thread.
+   - **Acceptance:** greedy �?only swaps that strictly decrease cost are kept.
+   - **Cost:** typically 0.1 �?2 seconds per layer on a single CPU thread.
 
-3. **Step 3 — Apply the permutation.** Permute `gate_proj` / `up_proj` rows and `down_proj` columns by the same `π`. Verify network equivalence: output of a random forward pass before/after should match to within FP16 ULP.
+3. **Step 3 �?Apply the permutation.** Permute `gate_proj` / `up_proj` rows and `down_proj` columns by the same `π`. Verify network equivalence: output of a random forward pass before/after should match to within FP16 ULP.
 
-4. **Step 4 — Hard-enforce 2:4.** Whatever misalignment is left after the search gets cleaned up by `hard_enforce_n_m()`: in each group of 4 columns per row, zero the 2 smallest-`|W|` entries. Typical cleanup touches < 5% of weights (vs. ~50% if you'd skipped step 2).
+4. **Step 4 �?Hard-enforce 2:4.** Whatever misalignment is left after the search gets cleaned up by `hard_enforce_n_m()`: in each group of 4 columns per row, zero the 2 smallest-`|W|` entries. Typical cleanup touches < 5% of weights (vs. ~50% if you'd skipped step 2).
 
-5. **Step 5 — Recovery fine-tune.** Short mask-frozen fine-tune on the calibration data to recover the small accuracy loss introduced by step 4. (Stage 3 QAT will also run with mask preservation, so the zeros stay zero through training.)
+5. **Step 5 �?Recovery fine-tune.** Short mask-frozen fine-tune on the calibration data to recover the small accuracy loss introduced by step 4. (Stage 3 QAT will also run with mask preservation, so the zeros stay zero through training.)
 
 ### When this is worth running
 
-- ✅ Target hardware has 2:4 acceleration: NVIDIA Ampere/Hopper Tensor Cores via `cuSPARSELt`, or the [llama.cpp sparse 2:4 CPU kernel](https://github.com/eating-and-drinking/llama.cpp) shipped as a sister repository.
-- ✅ You want the accuracy of unstructured pruning *and* the speedup of 2:4.
-- ❌ Skip if you don't have 2:4 hardware — plain unstructured is simpler and at least as accurate.
-- ❌ Skip for tiny calibration sets (< 64 samples); SparseGPT itself may not converge well, so permutation buys you nothing.
+- �?Target hardware has 2:4 acceleration: NVIDIA Ampere/Hopper Tensor Cores via `cuSPARSELt`, or the [llama.cpp sparse 2:4 CPU kernel](https://github.com/eating-and-drinking/llama.cpp) shipped as a sister repository.
+- �?You want the accuracy of unstructured pruning *and* the speedup of 2:4.
+- �?Skip if you don't have 2:4 hardware �?plain unstructured is simpler and at least as accurate.
+- �?Skip for tiny calibration sets (< 64 samples); SparseGPT itself may not converge well, so permutation buys you nothing.
 
 ### Usage
 
@@ -256,17 +237,17 @@ stats = permute_model_for_2_4(
     max_iters=300, swaps_per_iter=200, seed=0,
 )
 print(f"alignment: {stats['avg_initial_alignment']:.1%} "
-      f"→ {stats['avg_post_perm_alignment']:.1%} "
-      f"→ 100% after enforce")
+      f"�?{stats['avg_post_perm_alignment']:.1%} "
+      f"�?100% after enforce")
 ```
 
 Per-layer log output during the search:
 
 ```
 Channel permutation for 2:4 alignment across 36 blocks (enforce=True)
-  layer  0: alignment 49.8% → 96.4% (misalign 102341 → 7912 → 0 after enforce)
-  layer  1: alignment 49.7% → 96.1% (misalign 103014 → 8154 → 0 after enforce)
-  layer  2: alignment 49.9% → 96.7% (misalign 101803 → 7521 → 0 after enforce)
+  layer  0: alignment 49.8% �?96.4% (misalign 102341 �?7912 �?0 after enforce)
+  layer  1: alignment 49.7% �?96.1% (misalign 103014 �?8154 �?0 after enforce)
+  layer  2: alignment 49.9% �?96.7% (misalign 101803 �?7521 �?0 after enforce)
   ...
 ```
 
@@ -331,40 +312,40 @@ The teacher loads with `device_map="auto"` (shards across visible GPUs); the stu
 
 ## Results (representative)
 
-The numbers below are illustrative defaults for `Qwen2.5-14B-Instruct → Qwen2.5-3B → INT8` on a CoT SFT corpus of 120K examples. Reproduce by running the full pipeline; your own results depend on data, hardware, and budget.
+The numbers below are illustrative defaults for `Qwen2.5-14B-Instruct �?Qwen2.5-3B �?INT8` on a CoT SFT corpus of 120K examples. Reproduce by running the full pipeline; your own results depend on data, hardware, and budget.
 
-| Stage | Model size | MMLU | GSM8K | Latency (A10, batch=1) |
-|---|---:|---:|---:|---:|
-| Teacher (14B FP16) | 28 GB | 78.5 | 81.4 | 1.00× |
-| MOT-FD distilled (3B FP16) | 6.2 GB | 72.0 | 74.5 | 0.32× |
-| Pruned (3B 50%) | 6.2 GB ⁂ | 71.2 | 73.2 | 0.32× |
-| Pruned + QAT INT8 | 2.4 GB | 70.5 | 72.0 | 0.21× |
+| Stage | Model size | Accuracy | Latency (A10, batch=1) |
+|---|---:|---:|---:|
+| Teacher (14B FP16) | 28 GB | 78.5 | 1.00× |
+| MOT-FD distilled (3B FP16) | 6.2 GB | 72.0 | 0.32× |
+| Pruned (3B 50%) | 6.2 GB �?| 71.2 | 0.32× |
+| Pruned + QAT INT8 | 2.4 GB | 70.5 | 0.21× |
 
-⁂ Wall-clock size before sparse-aware packing; INT8 figure includes runtime quantization metadata.
+�?Wall-clock size before sparse-aware packing; INT8 figure includes runtime quantization metadata.
 
 ## Project Layout
 
 ```
 qwen-compress/
 ├── src/qwen_compress/
-│   ├── distill/              # Stage 1: MOT-FD distillation
-│   │   ├── groupwise.py         # Teacher functional decomposition (48→12 groups)
-│   │   ├── losses.py            # CE + KD + OT alignment + monotonic loss
-│   │   └── trainer.py           # GroupwiseDistillTrainer
-│   ├── prune/                # Stage 2: SparseGPT
-│   │   ├── sparsegpt.py         # Block-by-block one-shot pruner
-│   │   ├── permutation.py       # Channel permutation for 2:4
-│   │   ├── recovery.py          # Mask-preserving FT
-│   │   └── utils.py             # N:M masks, sparsity metrics
-│   ├── qat/                  # Stage 3: QAT + QAD
-│   │   ├── fake_quant.py        # FakeQuantize + QuantizedLinear
-│   │   ├── calibration.py       # Activation calibration
-│   │   ├── qad_trainer.py       # QAT loop with optional teacher
-│   │   └── export.py            # safetensors / ONNX QDQ export
-│   ├── models/qwen_wrapper.py
-│   ├── data/{cot_dataset,calibration_data}.py
-│   ├── utils/{config,checkpoint,logging,dist,seed}.py
-│   └── cli.py
+�?  ├── distill/              # Stage 1: MOT-FD distillation
+�?  �?  ├── groupwise.py         # Teacher functional decomposition (48�?2 groups)
+�?  �?  ├── losses.py            # CE + KD + OT alignment + monotonic loss
+�?  �?  └── trainer.py           # GroupwiseDistillTrainer
+�?  ├── prune/                # Stage 2: SparseGPT
+�?  �?  ├── sparsegpt.py         # Block-by-block one-shot pruner
+�?  �?  ├── permutation.py       # Channel permutation for 2:4
+�?  �?  ├── recovery.py          # Mask-preserving FT
+�?  �?  └── utils.py             # N:M masks, sparsity metrics
+�?  ├── qat/                  # Stage 3: QAT + QAD
+�?  �?  ├── fake_quant.py        # FakeQuantize + QuantizedLinear
+�?  �?  ├── calibration.py       # Activation calibration
+�?  �?  ├── qad_trainer.py       # QAT loop with optional teacher
+�?  �?  └── export.py            # safetensors / ONNX QDQ export
+�?  ├── models/qwen_wrapper.py
+�?  ├── data/{cot_dataset,calibration_data}.py
+�?  ├── utils/{config,checkpoint,logging,dist,seed}.py
+�?  └── cli.py
 ├── configs/{distill,prune,qat,pipeline}/*.yaml
 ├── scripts/run_{distill,prune,qat,pipeline}.sh
 ├── examples/quick_start.py
@@ -400,4 +381,4 @@ Repository: [https://github.com/eating-and-drinking/Qwen-compress](https://githu
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE). Includes an express patent grant.
+Apache License 2.0 �?see [LICENSE](LICENSE). Includes an express patent grant.
