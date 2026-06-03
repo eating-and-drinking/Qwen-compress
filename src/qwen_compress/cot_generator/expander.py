@@ -1,6 +1,6 @@
 """
-Self-Instruct 扩充器
-用 Qwen2.5-14B 自身扩充问题池，补足到目标数量
+Self-Instruct Expander
+Uses Qwen2.5-14B to expand question pool to target count
 """
 
 import re
@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 class SelfInstructExpander:
     """
-    给定种子问题列表，让模型不断生成新问题，直到达到 target_count。
-    每轮从种子池随机抽取一条作为示例，生成 5 条新问题。
+    Given a list of seed questions, generates new questions until reaching target_count.
+    Each iteration randomly selects a seed as example and generates 5 new questions.
     """
 
     def __init__(self, llm, tokenizer):
@@ -36,17 +36,17 @@ class SelfInstructExpander:
         batch_size: int = 32,
     ) -> list[dict]:
         """
-        返回新生成的问题列表（不含原始种子）
+        Returns list of newly generated questions (excluding original seeds)
         """
         existing_questions = {q["question"] for q in seed_questions}
         new_questions: list[dict] = []
         attempt = 0
-        max_attempts = target_count * 3  # 防止死循环
+        max_attempts = target_count * 3  # Prevent infinite loop
 
-        logger.info(f"Self-Instruct 扩充目标: {target_count} 条")
+        logger.info(f"Self-Instruct target: {target_count} items")
 
         while len(new_questions) < target_count and attempt < max_attempts:
-            # 随机抽取一批种子
+            # Randomly select a batch of seeds
             seeds = random.choices(seed_questions, k=batch_size)
             prompts = [
                 self._build_prompt(s["question"], s.get("domain", "general"))
@@ -78,9 +78,9 @@ class SelfInstructExpander:
 
             attempt += batch_size
             if attempt % 500 == 0:
-                logger.info(f"  Self-Instruct 进度: {len(new_questions)}/{target_count}")
+                logger.info(f"  Self-Instruct progress: {len(new_questions)}/{target_count}")
 
-        logger.info(f"Self-Instruct 扩充完成: 生成 {len(new_questions)} 条新问题")
+        logger.info(f"Self-Instruct complete: Generated {len(new_questions)} new questions")
         return new_questions
 
     # ------------------------------------------------------------------
@@ -94,15 +94,15 @@ class SelfInstructExpander:
 
     @staticmethod
     def _parse_questions(text: str) -> list[str]:
-        """解析模型输出，提取编号问题列表"""
+        """Parse model output and extract numbered question list"""
         lines = text.split("\n")
         questions = []
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-            # 去掉序号前缀：1. / 1、/ （1）
+            # Remove number prefix: 1. / 1、/ (1)
             cleaned = re.sub(r"^[\d]+[\.、）\)]\s*", "", line).strip()
-            if len(cleaned) >= 10:  # 过短的不要
+            if len(cleaned) >= 10:  # Skip too short questions
                 questions.append(cleaned)
         return questions

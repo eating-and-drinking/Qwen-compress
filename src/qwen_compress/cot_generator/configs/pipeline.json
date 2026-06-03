@@ -1,5 +1,5 @@
 {
-  "_comment": "CoT Generator Pipeline 配置文件",
+  "_comment": "CoT Generator Pipeline Configuration",
 
   "output_dir": "outputs/cot_dataset",
   "target_total": 120000,
@@ -19,7 +19,7 @@
     "max_tokens": 1024,
     "batch_size": 64,
     "min_thinking_length": 100,
-    "required_steps": ["步骤1", "步骤2", "步骤3"]
+    "required_steps": ["Step 1", "Step 2", "Step 3"]
   },
 
   "data_sources": {
@@ -31,7 +31,7 @@
     },
     "local_sources": [
       {
-        "_comment": "种子问题文件",
+        "_comment": "Seed question file",
         "path": "data/seeds/custom_math.jsonl",
         "domain": "math"
       },

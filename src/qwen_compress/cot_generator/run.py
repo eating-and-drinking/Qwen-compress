@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-CLI 入口
-用法:
+CLI Entry Point
+Usage:
   python run.py --config configs/pipeline.json
   python run.py --config configs/pipeline.json --target 50000
   python run.py --mode merge --output_dir outputs/cot_dataset
@@ -13,7 +13,7 @@ import logging
 import sys
 from pathlib import Path
 
-# 确保 src 可导入
+# Ensure src is importable
 sys.path.insert(0, str(Path(__file__).parent))
 
 logging.basicConfig(
@@ -29,7 +29,7 @@ def cmd_generate(args):
     with open(args.config, encoding="utf-8") as f:
         cfg = json.load(f)
 
-    # CLI 参数覆盖 config
+    # CLI args override config
     if args.target:
         cfg["target_total"] = args.target
     if args.output_dir:
@@ -46,7 +46,7 @@ def cmd_merge(args):
 
 
 def cmd_stats(args):
-    """统计已生成数据集的基本信息"""
+    """Show basic statistics of generated dataset"""
     import json
     base = Path(args.output_dir)
     for name in ["train_cot", "train_direct", "train_mixed", "val", "test"]:
@@ -54,10 +54,10 @@ def cmd_stats(args):
         if path.exists():
             with open(path) as f:
                 count = sum(1 for _ in f)
-            print(f"  {name:20s}: {count:>8,} 条")
+            print(f"  {name:20s}: {count:>8,} items")
     meta = base / "metadata.json"
     if meta.exists():
-        print(f"\n元数据: {meta}")
+        print(f"\nMetadata: {meta}")
 
 
 def main():
@@ -65,22 +65,22 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     # generate
-    p_gen = sub.add_parser("generate", help="运行生成 pipeline")
-    p_gen.add_argument("--config", default="configs/pipeline.json", help="pipeline 配置文件")
-    p_gen.add_argument("--target", type=int, help="覆盖目标生成数量")
-    p_gen.add_argument("--output_dir", help="覆盖输出目录")
-    p_gen.add_argument("--no_cross_val", action="store_true", help="禁用交叉验证（加速）")
+    p_gen = sub.add_parser("generate", help="Run generation pipeline")
+    p_gen.add_argument("--config", default="configs/pipeline.json", help="Pipeline config file")
+    p_gen.add_argument("--target", type=int, help="Override target count")
+    p_gen.add_argument("--output_dir", help="Override output directory")
+    p_gen.add_argument("--no_cross_val", action="store_true", help="Disable cross validation (faster)")
 
     # merge
-    p_merge = sub.add_parser("merge", help="混合 CoT/Direct 训练集")
+    p_merge = sub.add_parser("merge", help="Merge CoT/Direct training sets")
     p_merge.add_argument("--output_dir", required=True)
     p_merge.add_argument("--cot_ratio", type=float, default=0.7)
 
     # stats
-    p_stats = sub.add_parser("stats", help="统计数据集条数")
+    p_stats = sub.add_parser("stats", help="Show dataset statistics")
     p_stats.add_argument("--output_dir", required=True)
 
-    # 默认行为：无子命令时直接 generate
+    # Default behavior: run generate when no subcommand
     args = parser.parse_args()
     if args.command is None:
         args.command = "generate"

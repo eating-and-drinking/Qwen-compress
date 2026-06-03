@@ -1,6 +1,6 @@
 """
 CoT Generator Module
-批量生成 Chain-of-Thought 训练数据
+Batch generation of Chain-of-Thought training data
 """
 
 from .generator import CoTGenerator, GeneratorConfig

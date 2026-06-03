@@ -1,6 +1,6 @@
 """
-输出格式化模块
-将原始条目转换为标准 SFT 训练格式（CoT模式 / 直接答案模式）
+Output formatting module
+Convert raw entries to standard SFT training format (CoT mode / Direct answer mode)
 """
 
 import json
@@ -11,16 +11,16 @@ logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
-# 单条格式化
+# Single entry formatting
 # ------------------------------------------------------------------
 
 def format_sft_cot(system_prompt: str, question: str, parsed: dict) -> dict:
     """
-    CoT 模式：assistant 输出完整 <thinking>...</thinking><answer>...</answer>
-    用于训练模型的推理能力
+    CoT mode: assistant outputs complete <think>...</think><answer>...</answer>
+    Used to train the model's reasoning ability
     """
     assistant_content = (
-        f"<thinking>\n{parsed['thinking']}\n</thinking>\n\n"
+        f"<think>\n{parsed['thinking']}\n</think>\n\n"
         f"<answer>\n{parsed['answer']}\n</answer>"
     )
     return {
@@ -34,8 +34,8 @@ def format_sft_cot(system_prompt: str, question: str, parsed: dict) -> dict:
 
 def format_sft_direct(question: str, parsed: dict) -> dict:
     """
-    直接回答模式：assistant 只输出最终答案
-    用于保持模型的简洁回答能力，防止过拟合到 CoT 格式
+    Direct answer mode: assistant outputs only the final answer
+    Used to maintain the model's ability to give concise answers, prevent overfitting to CoT format
     """
     return {
         "messages": [
@@ -46,14 +46,14 @@ def format_sft_direct(question: str, parsed: dict) -> dict:
 
 
 # ------------------------------------------------------------------
-# 数据集写入
+# Dataset Writing
 # ------------------------------------------------------------------
 
 class DatasetWriter:
     """
-    按照预设比例将数据写入 train_cot / train_direct / val / test 四个文件
-    默认比例：train 83% / val 8.5% / test 8.5%
-    CoT:Direct 混合比例：7:3
+    Write data to four files: train_cot / train_direct / val / test
+    Default ratio: train 83% / val 8.5% / test 8.5%
+    CoT:Direct mix ratio: 7:3
     """
 
     def __init__(
@@ -78,7 +78,7 @@ class DatasetWriter:
         self._total = 0
 
     def add(self, entry: dict):
-        """添加一条原始条目，自动路由到对应 split"""
+        """Add a raw entry, automatically route to corresponding split"""
         self._total += 1
         split = self._assign_split()
 
@@ -91,7 +91,7 @@ class DatasetWriter:
             self._buffers["test"].append(entry["sft_cot"])
 
     def flush(self):
-        """将所有缓冲区写入磁盘"""
+        """Flush all buffers to disk"""
         for name, records in self._buffers.items():
             if not records:
                 continue
@@ -102,7 +102,7 @@ class DatasetWriter:
             self._buffers[name] = []
 
     def finalize(self) -> dict:
-        """最终刷盘并返回统计信息"""
+        """Final flush and return statistics"""
         self.flush()
         stats = {}
         for name in ["train_cot", "train_direct", "val", "test"]:
@@ -113,12 +113,12 @@ class DatasetWriter:
                     count = sum(1 for _ in f)
             stats[name] = count
 
-        # 写元数据
+        # Write metadata
         meta_path = self.output_dir / "metadata.json"
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump({"splits": stats, "total_raw": self._total}, f, ensure_ascii=False, indent=2)
 
-        logger.info(f"数据集写入完成：{stats}")
+        logger.info(f"Dataset writing complete: {stats}")
         return stats
 
     def _assign_split(self) -> str:
@@ -138,8 +138,8 @@ def merge_cot_and_direct(
     output_file: str = "train_mixed.jsonl",
 ):
     """
-    按 cot_ratio 混合 train_cot 和 train_direct，
-    生成用于双模式微调的最终训练文件
+    Merge train_cot and train_direct by cot_ratio,
+    Generate final training file for dual-mode fine-tuning
     """
     import random
     base = Path(output_dir)
@@ -155,7 +155,7 @@ def merge_cot_and_direct(
         with open(direct_path) as f:
             direct_lines = [json.loads(l) for l in f if l.strip()]
 
-    # 按比例抽取
+    # Sample by ratio
     n_cot = int(len(cot_lines) * cot_ratio)
     n_direct = int(len(direct_lines) * (1 - cot_ratio))
     mixed = random.sample(cot_lines, min(n_cot, len(cot_lines)))
@@ -166,5 +166,5 @@ def merge_cot_and_direct(
         for r in mixed:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    logger.info(f"混合数据集已写入: {out_path}，共 {len(mixed)} 条（CoT:{n_cot} + Direct:{n_direct}）")
+    logger.info(f"Mixed dataset written to: {out_path}, total {len(mixed)} entries (CoT:{n_cot} + Direct:{n_direct})")
     return str(out_path)

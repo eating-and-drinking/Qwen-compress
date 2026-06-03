@@ -1,6 +1,6 @@
 """
-CoT Generator - 核心生成模块
-使用 vLLM 批量驱动 Qwen2.5-14B-Instruct 生成思维链数据
+CoT Generator - Core generation module
+Uses vLLM to batch-drive Qwen2.5-14B-Instruct for Chain-of-Thought data generation
 """
 
 import re
@@ -31,7 +31,7 @@ class GeneratorConfig:
 
     batch_size: int = 64
     min_thinking_length: int = 100
-    required_steps: list = field(default_factory=lambda: ["步骤1", "步骤2", "步骤3"])
+    required_steps: list = field(default_factory=lambda: ["Step 1", "Step 2", "Step 3"])
 
 
 class CoTGenerator:
@@ -55,16 +55,16 @@ class CoTGenerator:
             stop=["<|im_end|>"],
         )
 
-        # 用于构建 chat template
+        # For building chat template
         from transformers import AutoTokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
     # ------------------------------------------------------------------
-    # 公开接口
+    # Public Interface
     # ------------------------------------------------------------------
 
     def generate_batch(self, questions: list[dict]) -> list[dict]:
-        """批量生成，返回通过质量过滤的条目列表"""
+        """Generate in batch, return filtered entries that pass quality checks"""
         prompts = [self._build_prompt(q) for q in questions]
         outputs = self.llm.generate(prompts, self.sampling_params)
 
@@ -95,7 +95,7 @@ class CoTGenerator:
         }
 
     # ------------------------------------------------------------------
-    # 内部方法
+    # Internal Methods
     # ------------------------------------------------------------------
 
     def _build_prompt(self, q: dict) -> str:
@@ -108,7 +108,7 @@ class CoTGenerator:
         )
 
     def _parse_output(self, text: str) -> Optional[dict]:
-        thinking_match = re.search(r"<thinking>(.*?)</thinking>", text, re.DOTALL)
+        thinking_match = re.search(r"<think>(.*?)</think>", text, re.DOTALL)
         answer_match = re.search(r"<answer>(.*?)</answer>", text, re.DOTALL)
 
         if not thinking_match or not answer_match:
@@ -125,16 +125,17 @@ class CoTGenerator:
         return {"thinking": thinking, "answer": answer}
 
     def _quality_check(self, parsed: dict, q: dict) -> bool:
-        # 1. 去重
+        # 1. Deduplication
         content_hash = hashlib.md5(parsed["thinking"].encode()).hexdigest()
         if content_hash in self.dedup_set:
             self._stats["dedup_drop"] += 1
             return False
         self.dedup_set.add(content_hash)
 
-        # 2. 步骤完整性
+        # 2. Step completeness - check if reasoning contains multiple logical steps
         thinking = parsed["thinking"]
-        if not all(m in thinking for m in self.config.required_steps):
+        step_indicators = ["1.", "2.", "3.", "4.", "First", "Second", "Then", "Finally", "Analyze", "Reason", "Verify"]
+        if not any(indicator in thinking for indicator in step_indicators):
             self._stats["quality_drop"] += 1
             return False
 

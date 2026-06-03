@@ -1,4 +1,4 @@
-﻿﻿# CoT Generator
+﻿# CoT Generator
 
 Batch generate high-quality Chain-of-Thought (CoT) training data for large model supervised fine-tuning.
 
@@ -116,10 +116,13 @@ Support HuggingFace datasets and local JSONL files:
 
 | Source | Type | Domain | Description |
 |--------|------|--------|-------------|
-| math | HuggingFace | Mathematics | Competition math problems |
-| logiqa | HuggingFace | Logic | Logical reasoning questions |
-| ceval | HuggingFace | General | Chinese exam dataset |
+| math | HuggingFace | Mathematics | Competition math problems (hendrycks/competition_math) |
+| gsm8k | HuggingFace | Mathematics | Grade school math word problems |
+| arc | HuggingFace | Science | Science exam questions (multiple choice) |
+| openbookqa | HuggingFace | General | Open book QA questions (multiple choice) |
 | mbpp | HuggingFace | Code | Python programming problems |
+| logiqa | HuggingFace | Logic | Logical reasoning questions (multiple choice) |
+| ceval | HuggingFace | General | Chinese exam dataset (multiple choice) |
 | local | JSONL | Custom | Local seed files |
 
 ---
