@@ -1,6 +1,3 @@
-# Stage 2: SparseGPT unstructured pruning of the distilled 3B student.
-# Default 50% sparsity is the SparseGPT sweet spot for LLMs; bump to 60% with
-# care (recovery FT becomes necessary).
 
 stage: prune
 
@@ -8,19 +5,17 @@ model_name_or_path: ./checkpoints/distill/final
 output_dir: ./checkpoints/prune
 
 sparsity: 0.5
-sparsity_type: unstructured          # change to "2:4" for Ampere/Hopper sparse-tensor cores
-block_size: 128
+sparsity_type: unstructured         
 percdamp: 0.01
 
-# Calibration uses the same SFT data used for distillation, so the activation
-# distribution matches deployment.
+
 calibration_path: ./data/cot_sft_train.jsonl
 nsamples: 128
 max_seq_length: 2048
 seed: 42
 device: cuda
 
-# Short mask-preserving recovery fine-tune. ~5-10% of the distillation budget.
+
 recovery_finetune: true
 recovery:
   output_dir: ./checkpoints/prune/recovery

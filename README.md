@@ -139,6 +139,15 @@ qwen-compress/
 | `block_size` | 128 | SparseGPT块大小 |
 | `nsamples` | 128 | 校准样本数 |
 | `recovery_finetune` | true | 是否启用恢复微调 |
+| `permutation.enabled` | true | 是否启用通道重排（默认开启，用于2:4模式） |
+| `permutation.target` | "2:4" | 目标稀疏模式 |
+
+**剪枝流程（默认）：**
+1. **标准非结构化剪枝** → 算法默认采用该形式
+2. **通道重排** → 将稀疏模式对齐到 2:4 网格，支持 Tensor Core 加速
+3. **恢复微调** → 恢复因剪枝损失的精度
+
+**收益**：精度接近非结构化剪枝（损失 ~0.1-0.2 PPL），同时获得约 1.5x 的推理速度提升。
 
 ### 量化配置 (`configs/qat/*.yaml`)
 
