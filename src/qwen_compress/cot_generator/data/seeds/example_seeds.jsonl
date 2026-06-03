@@ -1,6 +1,25 @@
-{"id": "seed_math_001", "question": "小明有15个苹果，给了小红三分之一，又买了8个，现在他有多少个苹果？", "domain": "math"}
-{"id": "seed_math_002", "question": "一列火车以每小时90公里的速度行驶，从A城到B城需要2.5小时，A城到B城的距离是多少公里？", "domain": "math"}
-{"id": "seed_logic_001", "question": "所有的猫都是动物，Tom是一只猫，请问Tom是动物吗？请说明推理过程。", "domain": "logic"}
-{"id": "seed_logic_002", "question": "如果下雨，地面会湿。现在地面是湿的，能否得出正在下雨的结论？", "domain": "logic"}
-{"id": "seed_code_001", "question": "以下Python代码的输出是什么？\nx = [1, 2, 3]\ny = x\ny.append(4)\nprint(x)", "domain": "code"}
-{"id": "seed_common_001", "question": "为什么冬天的白天比夏天短？", "domain": "common_sense"}
+{"id": "seed_math_001", "question": "A train travels at 90 km/h. How far does it travel in 2.5 hours?", "domain": "math"}
+{"id": "seed_math_002", "question": "If x + 3 = 7, what is the value of 2x - 1?", "domain": "math"}
+{"id": "seed_math_003", "question": "A rectangle has length 12 cm and width 8 cm. What is its area?", "domain": "math"}
+{"id": "seed_math_004", "question": "John has 48 apples. He gives 1/3 to Mary and buys 8 more. How many apples does he have now?", "domain": "math"}
+{"id": "seed_math_005", "question": "What is the square root of 625?", "domain": "math"}
+{"id": "seed_logic_001", "question": "All cats are mammals. Fluffy is a cat. Is Fluffy a mammal?", "domain": "logic"}
+{"id": "seed_logic_002", "question": "If it rains, the ground gets wet. The ground is wet. Can we conclude it is raining?", "domain": "logic"}
+{"id": "seed_logic_003", "question": "If all birds can fly and penguins are birds, can penguins fly?", "domain": "logic"}
+{"id": "seed_logic_004", "question": "No fish can breathe air. A shark is a fish. Can a shark breathe air?", "domain": "logic"}
+{"id": "seed_logic_005", "question": "Some dogs are brown. Max is a dog. Is Max brown?", "domain": "logic"}
+{"id": "seed_code_001", "question": "What is the output of: print(len([1, 2, 3, 4]))", "domain": "code"}
+{"id": "seed_code_002", "question": "What does Python's range(5) produce?", "domain": "code"}
+{"id": "seed_code_003", "question": "Explain what the following code does:\nx = 5\ny = x ** 2\nprint(y)", "domain": "code"}
+{"id": "seed_code_004", "question": "What is the result of 3 * 'hello' in Python?", "domain": "code"}
+{"id": "seed_code_005", "question": "What does the `append()` method do in Python lists?", "domain": "code"}
+{"id": "seed_science_001", "question": "Why do objects fall to the ground when dropped?", "domain": "science"}
+{"id": "seed_science_002", "question": "What gas do plants absorb from the air for photosynthesis?", "domain": "science"}
+{"id": "seed_science_003", "question": "What is the boiling point of water at sea level?", "domain": "science"}
+{"id": "seed_science_004", "question": "Which planet is closest to the Sun?", "domain": "science"}
+{"id": "seed_science_005", "question": "What type of rock is formed from cooled magma?", "domain": "science"}
+{"id": "seed_common_001", "question": "Why is the sky blue?", "domain": "common_sense"}
+{"id": "seed_common_002", "question": "Why do we wear sunglasses on sunny days?", "domain": "common_sense"}
+{"id": "seed_common_003", "question": "Why do leaves change color in autumn?", "domain": "common_sense"}
+{"id": "seed_common_004", "question": "Why should you not touch electrical appliances with wet hands?", "domain": "common_sense"}
+{"id": "seed_common_005", "question": "Why do you feel colder when you wet your skin?", "domain": "common_sense"}
