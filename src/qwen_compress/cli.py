@@ -190,17 +190,37 @@ def pipeline(config_path: str) -> None:
     distill_out = GroupwiseDistillTrainer(cfg.distill).train()
     cfg.prune.model_name_or_path = str(distill_out)
     ctx = click.get_current_context()
+    import atexit
     import tempfile
     import yaml
+    _tmp_files: list[str] = []
+
+    def _cleanup_tmp() -> None:
+        import os as _os
+        for f in _tmp_files:
+            try:
+                _os.unlink(f)
+            except OSError:
+                pass
+
+    atexit.register(_cleanup_tmp)
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fp:
         yaml.safe_dump({"stage": "prune", **cfg.prune.model_dump()}, fp)
         prune_cfg_path = fp.name
+    _tmp_files.append(prune_cfg_path)
     ctx.invoke(prune, config_path=prune_cfg_path)
-    cfg.qat.model_name_or_path = str(Path(cfg.prune.output_dir) / "recovered" / "final")
+    if cfg.prune.recovery_finetune:
+        cfg.qat.model_name_or_path = str(Path(cfg.prune.output_dir) / "recovered" / "final")
+    else:
+        cfg.qat.model_name_or_path = str(Path(cfg.prune.output_dir) / "pruned")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fp:
         yaml.safe_dump({"stage": "qat", **cfg.qat.model_dump()}, fp)
         qat_cfg_path = fp.name
+    _tmp_files.append(qat_cfg_path)
     ctx.invoke(qat, config_path=qat_cfg_path, export_only=False)
+    _cleanup_tmp()
+    atexit.unregister(_cleanup_tmp)
     click.echo("\nFull pipeline complete.")
 
 

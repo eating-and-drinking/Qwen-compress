@@ -203,6 +203,12 @@ def run_recovery_finetune(
                     )
                     running_loss = 0.0
 
+                # Periodic checkpoint saves.
+                if global_step % training_cfg.save_steps == 0:
+                    ckpt_dir = output_dir / f"step-{global_step}"
+                    save_compressed_model(model, tokenizer, ckpt_dir, extra_meta=extra_meta)
+                    _logger.info(f"[recovery] Saved checkpoint: {ckpt_dir}")
+
     final = output_dir / "final"
     save_compressed_model(model, tokenizer, final, extra_meta=extra_meta)
     _logger.info(f"Recovery FT done. Saved to {final}")

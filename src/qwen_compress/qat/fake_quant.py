@@ -26,7 +26,6 @@ import torch.nn.functional as F
 from torch import nn
 
 from qwen_compress.models.qwen_wrapper import (
-    QWEN_ALL_LINEARS,
     get_decoder_layers,
     get_linear_layers_in_block,
 )
@@ -130,18 +129,27 @@ class FakeQuantize(nn.Module):
 
         x = torch.cat([o.flatten(0, -2) if o.dim() >= 2 else o.unsqueeze(0) for o in self._observed], dim=0)
         if self.granularity == "per_channel":
-            x_ch = x.transpose(0, self.ch_axis % x.dim()).reshape(x.shape[self.ch_axis], -1)
+            # Bring the channel axis to dim 0 for per-row fitting.
+            # For weights: x is [out_features, in_features], scale-per-output-channel
+            #   → ch_axis=0, already correct.
+            # For activations: x is [total_tokens, hidden_dim], scale-per-feature
+            #   → need to move hidden_dim (ch_axis=1) to dim 0.
+            if x.dim() == 2 and self.ch_axis != 0:
+                x_ch = x.transpose(0, self.ch_axis % x.dim())
+            else:
+                x_ch = x
+            x_ch = x_ch.reshape(x_ch.shape[0], -1)
             scales, zps = self._fit_per_row(x_ch)
         else:
             scales, zps = self._fit_per_row(x.reshape(1, -1))
 
-        # Replace buffer/parameter with the right shape.
+        # Properly register scale and zero_point so they persist in state_dict.
         if self._learnable:
             with torch.no_grad():
                 self.scale = nn.Parameter(scales)
         else:
-            self.scale = scales
-        self.zero_point = zps
+            self.register_buffer("scale", scales)
+        self.register_buffer("zero_point", zps)
         self.initialized.fill_(True)
         self._observed = []
         self._calibrating = False

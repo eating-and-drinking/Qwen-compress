@@ -3,10 +3,10 @@
 """Pydantic-backed configuration models."""
 
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class OptimizerConfig(BaseModel):
@@ -55,26 +55,51 @@ class TrainingConfig(BaseModel):
     optimizer: OptimizerConfig = OptimizerConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
 
-    @field_validator("fp16")
-    @classmethod
-    def _exclusive_precision(cls, v, info):
-        if v and info.data.get("bf16"):
+    @model_validator(mode="after")
+    def _exclusive_precision(self) -> "TrainingConfig":
+        if self.bf16 and self.fp16:
             raise ValueError("Only one of `bf16` or `fp16` may be true.")
-        return v
+        return self
 
 
 class DistillConfig(BaseModel):
+    """MOT-FD distillation configuration.
+
+    Key parameters for Monotonic Optimal Transport Functional Distillation:
+    - Teacher decomposition: energy_alpha/beta/gamma, min_peak_distance
+    - OT alignment: lambda_ot, lambda_mono, ot_temperature, sinkhorn_iters
+    - Composite loss: L = α·CE + β·KD + λ_ot·L_OT + λ_mono·L_mono
+    """
     model_config = ConfigDict(extra="forbid")
     teacher_model_name_or_path: str
     student_model_name_or_path: str
+
+    # ---- Functional decomposition ----
     num_groups: int = Field(default=12, ge=1)
-    group_strategy: Literal["uniform", "depth_aware"] = "uniform"
+    calibration_samples: int = Field(default=256, ge=1)
+    energy_alpha: float = Field(default=1.0, ge=0.0)
+    energy_beta: float = Field(default=0.5, ge=0.0)
+    energy_gamma: float = Field(default=0.3, ge=0.0)
+    min_peak_distance: int = Field(default=2, ge=1)
+
+    # ---- Composite loss weights (MOT-FD) ----
     alpha_ce: float = Field(default=1.0, ge=0.0)
     beta_kd: float = Field(default=1.0, ge=0.0)
-    gamma_hidden: float = Field(default=1.0, ge=0.0)
-    delta_attn: float = Field(default=0.5, ge=0.0)
+    gamma_hidden: float = Field(default=0.0, ge=0.0)   # legacy, 0 disables
+    delta_attn: float = Field(default=0.0, ge=0.0)      # legacy, 0 disables
+
+    # ---- OT-specific weights ----
+    lambda_ot: float = Field(default=1.0, ge=0.0)
+    lambda_mono: float = Field(default=0.1, ge=0.0)
+
+    # ---- Temperature / hyperparams ----
     kd_temperature: float = Field(default=2.0, gt=0.0)
+    ot_temperature: float = Field(default=0.1, gt=0.0)
+    sinkhorn_iters: int = Field(default=50, ge=1)
+
+    # ---- Training ----
     freeze_embedding: bool = False
+    projector_lr_multiplier: float = Field(default=0.1, ge=0.0, le=1.0)
     data: DataConfig
     training: TrainingConfig
 

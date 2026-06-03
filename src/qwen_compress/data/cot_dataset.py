@@ -104,16 +104,23 @@ class CoTDataset(Dataset):
         self.max_seq_length = max_seq_length
         self.mode = mode
         self._rng = random.Random(seed)
+        # Pre-compute mode assignments so re-iterating always yields the same
+        # per-index mode choice (true determinism).
+        self._mode_assignments: Optional[List[Literal["direct", "cot"]]] = None
+        if mode == "dual":
+            self._mode_assignments = [
+                "cot" if self._rng.choice([True, False]) else "direct"
+                for _ in range(len(self.examples))
+            ]
         _logger.info(f"Loaded {len(self.examples)} examples from {path} (mode={mode})")
 
     def __len__(self) -> int:
         return len(self.examples)
 
     def _pick_mode(self, idx: int) -> Literal["direct", "cot"]:
-        if self.mode != "dual":
-            return self.mode  # type: ignore[return-value]
-        # Deterministic per-index choice so re-iterating yields the same labels.
-        return "cot" if (idx + self._rng.randint(0, 1)) % 2 == 0 else "direct"
+        if self._mode_assignments is not None:
+            return self._mode_assignments[idx]
+        return self.mode  # type: ignore[return-value]
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         ex = self.examples[idx]

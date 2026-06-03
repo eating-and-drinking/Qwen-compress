@@ -27,7 +27,7 @@ from torch.utils.data import DataLoader
 
 from qwen_compress.data.calibration_data import build_calibration_loader
 from qwen_compress.data.cot_dataset import CoTDataset, DataCollatorForCoT
-from qwen_compress.distill.groupwise import build_group_assignment
+from qwen_compress.distill.groupwise import build_group_assignment_legacy
 from qwen_compress.distill.losses import DistillationLoss
 from qwen_compress.models.qwen_wrapper import (
     get_decoder_layers,
@@ -200,9 +200,9 @@ class QADTrainer:
         if self.teacher is not None:
             t_info = inspect_qwen_model(self.teacher)
             s_info = inspect_qwen_model(self.student)
-            # Use one anchor per ~4 student layers, capped at 8.
+            # Use one anchor per ~4 student layers, capped at 8 (legacy mode).
             num_anchors = min(8, max(1, s_info.num_hidden_layers // 4))
-            self.assignment = build_group_assignment(
+            self.assignment = build_group_assignment_legacy(
                 t_info.num_hidden_layers,
                 s_info.num_hidden_layers,
                 num_groups=num_anchors,
@@ -211,7 +211,7 @@ class QADTrainer:
             self.loss_fn = DistillationLoss(
                 student_hidden_size=s_info.hidden_size,
                 teacher_hidden_size=t_info.hidden_size,
-                num_groups=num_anchors,
+                teacher_group_reps=None,  # legacy QAT mode (hidden cosine only)
                 alpha_ce=config.alpha_ce,
                 beta_kd=config.beta_kd,
                 gamma_hidden=config.gamma_hidden,
@@ -306,13 +306,14 @@ class QADTrainer:
         with torch.no_grad():
             t_out = self.teacher(input_ids=input_ids, attention_mask=attn, use_cache=False)
 
-        s_hidden = [c.last.to(device) for c in self._student_caps]  # type: ignore[union-attr]
-        t_hidden = [c.last.to(device) for c in self._teacher_caps]  # type: ignore[union-attr]
+        s_hidden = [c.last.to(device) for c in self._student_caps if c.last is not None]  # type: ignore[union-attr]
+        t_hidden = [c.last.to(device) for c in self._teacher_caps if c.last is not None]  # type: ignore[union-attr]
 
         loss_out = self.loss_fn(
             student_logits=s_out.logits,
             teacher_logits=t_out.logits.to(device),
             labels=labels,
+            attention_mask=attn,
             student_hidden_states=s_hidden,
             teacher_hidden_states=t_hidden,
         )
@@ -352,7 +353,8 @@ class QADTrainer:
                     if self._scaler is not None:
                         self._scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(
-                        [p for p in self.student.parameters() if p.requires_grad],
+                        [p for pg in self.optimizer.param_groups
+                         for p in pg["params"] if p.grad is not None],
                         cfg.training.max_grad_norm,
                     )
                     if self._scaler is not None:

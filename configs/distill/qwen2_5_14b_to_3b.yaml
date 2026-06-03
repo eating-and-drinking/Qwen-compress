@@ -1,5 +1,11 @@
-# Stage 1: Group-wise distillation from Qwen2.5-14B-Instruct teacher
-# into Qwen2.5-3B student (initialized from the official 3B pretrained checkpoint).
+# Stage 1: MOT-FD distillation from Qwen2.5-14B-Instruct teacher
+# into Qwen2.5-3B student.
+#
+# Algorithm: Monotonic Optimal Transport Functional Distillation (MOT-FD)
+#   - Teacher: 48 layers → 12 functional groups via change-point detection
+#   - Student: 36 layers, continuous representation manifold
+#   - Alignment: Sinkhorn optimal transport with monotonic constraint
+#   - Loss: L = α·CE + β·KD + λ_ot·L_OT + λ_mono·L_mono
 #
 # Hardware target: 8x A100 80GB (teacher sharded with device_map=auto, student on cuda:0).
 # Adjust gradient_accumulation_steps for smaller setups.
@@ -9,18 +15,30 @@ stage: distill
 teacher_model_name_or_path: Qwen/Qwen2.5-14B-Instruct
 student_model_name_or_path: Qwen/Qwen2.5-3B
 
-# Group-wise distillation hyperparameters.
+# ---- Functional Decomposition (48 → 12 groups) ----
 num_groups: 12
-group_strategy: uniform
+calibration_samples: 256          # samples for teacher decomposition
+energy_alpha: 1.0                 # α: first-order change weight
+energy_beta: 0.5                  # β: second-order (acceleration) weight
+energy_gamma: 0.3                 # γ: cosine-distance weight
+min_peak_distance: 2              # minimum gap between breakpoints
 
-# Composite loss weights:  L = alpha*CE + beta*KD + gamma*hidden + delta*attn
-alpha_ce: 1.0
-beta_kd: 1.0
-gamma_hidden: 1.0
-delta_attn: 0.5
-kd_temperature: 2.0
+# ---- MOT-FD Composite Loss Weights ----
+# L = α·L_CE + β·L_KD + λ_ot·L_OT + λ_mono·L_mono
+alpha_ce: 1.0                     # CE weight
+beta_kd: 1.0                      # KD (KL divergence) weight
+gamma_hidden: 0.0                 # legacy hidden cosine (0 = disabled)
+delta_attn: 0.0                   # legacy attention KL (0 = disabled)
+lambda_ot: 1.0                    # OT alignment weight
+lambda_mono: 0.1                  # monotonic regularization weight
+
+# ---- Temperature / Hyperparameters ----
+kd_temperature: 2.0               # KD softmax temperature
+ot_temperature: 0.1               # Sinkhorn entropy regularization ε
+sinkhorn_iters: 50                # Sinkhorn iterations
 
 freeze_embedding: false
+projector_lr_multiplier: 0.1      # projector LR = base LR × this value
 
 data:
   train_path: ./data/cot_sft_120k.jsonl

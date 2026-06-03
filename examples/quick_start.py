@@ -64,11 +64,10 @@ def main() -> None:
         teacher_model_name_or_path=args.teacher,
         student_model_name_or_path=args.student,
         num_groups=12,
-        group_strategy="uniform",
         data=data_cfg,
         training=common_train_cfg,
     )
-    print("=" * 60, "\n[1/2] Distillation\n", "=" * 60, sep="")
+    print("=" * 60, "\n[1/2] MOT-FD Distillation\n", "=" * 60, sep="")
     distill_out = GroupwiseDistillTrainer(distill_cfg).train()
 
     qat_cfg = QATConfig(

@@ -1,7 +1,7 @@
-# Full three-stage pipeline:
-#   Qwen2.5-14B-Instruct (teacher) -> Qwen2.5-3B (student)
-#   -> SparseGPT 50% pruning + recovery FT
-#   -> INT8 QAT with QAD using the same teacher
+# Full three-stage pipeline with MOT-FD distillation:
+#   MOT-FD: Qwen2.5-14B-Instruct -> Qwen2.5-3B
+#   → SparseGPT 50% pruning + recovery FT
+#   → INT8 QAT with QAD using the same teacher
 #
 # To launch:  qwen-compress pipeline --config configs/pipeline/full.yaml
 
@@ -12,14 +12,29 @@ name: qwen2_5_14b_to_3b_int8_pipeline
 distill:
   teacher_model_name_or_path: Qwen/Qwen2.5-14B-Instruct
   student_model_name_or_path: Qwen/Qwen2.5-3B
+
+  # ---- Functional Decomposition ----
   num_groups: 12
-  group_strategy: uniform
+  calibration_samples: 256
+  energy_alpha: 1.0
+  energy_beta: 0.5
+  energy_gamma: 0.3
+  min_peak_distance: 2
+
+  # ---- MOT-FD Loss Weights ----
   alpha_ce: 1.0
   beta_kd: 1.0
-  gamma_hidden: 1.0
-  delta_attn: 0.5
+  gamma_hidden: 0.0
+  delta_attn: 0.0
+  lambda_ot: 1.0
+  lambda_mono: 0.1
+
   kd_temperature: 2.0
+  ot_temperature: 0.1
+  sinkhorn_iters: 50
   freeze_embedding: false
+  projector_lr_multiplier: 0.1
+
   data:
     train_path: ./data/cot_sft_120k.jsonl
     max_seq_length: 4096

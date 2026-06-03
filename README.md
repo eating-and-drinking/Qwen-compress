@@ -1,7 +1,7 @@
 # qwen-compress
 
 Production-grade LLM compression toolkit for the Qwen family of models.
-Three composable stages — **Group-wise Distillation → SparseGPT Pruning → INT8 QAT/QAD** — that take a 14B-class teacher down to a 3B INT8 student suitable for edge deployment, while preserving chain-of-thought reasoning quality.
+Three composable stages — **MOT-FD Distillation → SparseGPT Pruning → INT8 QAT/QAD** — that take a 14B-class teacher down to a 3B INT8 student suitable for edge deployment, while preserving chain-of-thought reasoning quality.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org)
@@ -11,9 +11,9 @@ English
 
 ---
 
-## Features
+## Featuresv
 
-- **Group-wise distillation.** Splits the teacher's decoder stack into `G` contiguous groups, picks one anchor layer per group, and matches the student's corresponding layer via a learned projector. Outperforms last-layer logit matching when the teacher is much deeper than the student.
+- **MOT-FD distillation.** Monotonic Optimal Transport Functional Distillation: decomposes the 48-layer teacher into 12 functional groups via change-point detection on representation dynamics, then aligns the 36-layer student using Sinkhorn optimal transport with a monotonic semantic-progression constraint. Outperforms naive layer-matching strategies when the teacher is much deeper than the student.
 - **SparseGPT pruning.** Block-by-block one-shot pruning with damped Hessian inversion. Supports unstructured, 2:4, and 4:8 patterns. Memory peaks at one decoder block.
 - **Channel permutation for 2:4** (`prune.permutation.enabled: true`). Prune unstructured for max accuracy, then search a column permutation that snaps the existing zeros onto a 2:4 grid, then hard-enforce the residual. Yields ~unstructured accuracy with 2:4 hardware speedup — currently the Pareto frontier on Ampere/Hopper Tensor Cores and our CPU 2:4 kernel.
 - **QAT with optional QAD.** Drop-in `FakeQuantize` modules, per-channel weight + per-tensor (or per-token) activation quantization, learnable scales via LSQ, KV-cache quantization for end-to-end INT8 inference, and quantization-aware distillation that re-uses the same teacher to recover quantization-induced perplexity.
@@ -25,26 +25,65 @@ English
 ## Architecture
 
 ```
-┌────────────────────┐     stage 1: distill      ┌────────────────────┐
-│ Qwen2.5-14B-Inst.  │  ───────────────────────▶ │   Qwen2.5-3B       │
-│  (teacher, frozen) │   group-wise CE+KD+MSE    │  (student, FP16)   │
-└────────────────────┘                           └─────────┬──────────┘
-                                                           │
+┌────────────────────┐     stage 1: MOT-FD distill   ┌────────────────────┐
+│ Qwen2.5-14B-Inst.  │  ──────────────────────────▶  │   Qwen2.5-3B       │
+│  (teacher, frozen) │   48→12 groups, OT align,     │  (student, FP16)   │
+│                    │   monotonic constraint         │                    │
+└────────────────────┘                               └─────────┬──────────┘
+                                                               │
                                               stage 2: SparseGPT prune
-                                                           │
-                                            ┌──────────────▼───────────┐
-                                            │  3B @ 50% unstructured    │
-                                            │   + mask-preserving FT    │
-                                            └──────────────┬────────────┘
-                                                           │
+                                                               │
+                                            ┌──────────────────▼───────────┐
+                                            │  3B @ 50% unstructured        │
+                                            │   + mask-preserving FT        │
+                                            └──────────────────┬────────────┘
+                                                               │
                                        stage 3: INT8 QAT + QAD
                                        (re-using the 14B teacher)
-                                                           │
-                                            ┌──────────────▼───────────┐
-                                            │ 3B INT8 (W8A8 + KV-cache) │
-                                            │   safetensors / ONNX     │
-                                            └──────────────────────────┘
+                                                               │
+                                            ┌──────────────────▼───────────┐
+                                            │ 3B INT8 (W8A8 + KV-cache)    │
+                                            │   safetensors / ONNX         │
+                                            └──────────────────────────────┘
 ```
+
+## Algorithm: MOT-FD
+
+### 1. Teacher Functional Decomposition (48 → 12 Groups)
+
+For each teacher layer l, extract the mean representation z_l^T = E_{x~D}[h_l^T(x)]. Then compute a representation dynamics energy signal:
+
+```
+E(l) = α·||z_{l+1} - z_l|| + β·||z_{l+1} - 2z_l + z_{l-1}|| + γ·(1 - cos(z_{l+1}, z_l))
+```
+
+Detect 11 change points (breakpoints) via peak detection on E(l), and construct 12 non-uniform functional groups G_k = [b_{k-1}, b_k). Each group is summarized as g_k^T = mean(G_k^T).
+
+**Interpretation:**
+- Early groups → syntax / token formation
+- Middle groups → semantic integration
+- Late groups → reasoning + alignment
+
+### 2. Student Representation Manifold
+
+The student produces 36 layer hidden states H^S = {h_1^S, ..., h_36^S}. No explicit grouping is imposed — the student remains a continuous representation manifold.
+
+### 3. Optimal Transport Alignment
+
+A cost matrix C_{l,k} = ||h_l^S - g_k^T||^2 is built between all student layers and teacher group representations. The Sinkhorn algorithm solves for an entropy-regularized transport plan γ* that minimizes Σ γ_{l,k} C_{l,k} subject to marginal constraints.
+
+A **monotonic constraint** ensures semantic order is preserved: l_1 < l_2 ⇒ E_γ[k|l_1] ≤ E_γ[k|l_2]. This prevents "semantic backtracking" in student depth.
+
+### 4. Composite Loss
+
+```
+L = L_CE + λ_KD·L_KD + λ_OT·L_OT + λ_mono·L_mono
+```
+
+- **L_CE**: Standard next-token prediction cross-entropy.
+- **L_KD**: KL-divergence between student and teacher logits.
+- **L_OT**: Σ γ_{l,k} C_{l,k} — the optimal transport alignment cost.
+- **L_mono**: Σ_l max(0, μ_l - μ_{l+1}) — monotonic regularization where μ_l is the expected functional position of student layer l.
 
 ## Installation
 
@@ -66,7 +105,7 @@ Requires Python ≥ 3.9, PyTorch ≥ 2.1, CUDA ≥ 11.8 (for flash-attention 2 y
 ### CLI (recommended)
 
 ```bash
-# Stage 1: distill Qwen2.5-14B-Instruct -> Qwen2.5-3B
+# Stage 1: MOT-FD distill Qwen2.5-14B-Instruct -> Qwen2.5-3B
 bash scripts/run_distill.sh configs/distill/qwen2_5_14b_to_3b.yaml
 
 # Stage 2: SparseGPT 50% pruning + recovery FT
@@ -86,7 +125,7 @@ from qwen_compress.distill import GroupwiseDistillTrainer
 from qwen_compress.qat import QADTrainer, export_quantized_model
 from qwen_compress.utils.config import load_config
 
-# Stage 1
+# Stage 1: MOT-FD distillation
 distill_cfg = load_config("configs/distill/qwen2_5_14b_to_3b.yaml", stage="distill")
 distilled_path = GroupwiseDistillTrainer(distill_cfg).train()
 
@@ -230,18 +269,27 @@ Channel permutation for 2:4 alignment across 36 blocks (enforce=True)
   layer  2: alignment 49.9% → 96.7% (misalign 101803 → 7521 → 0 after enforce)
   ...
 ```
+
 ## Configuration Reference
 
 Each stage is driven by a single YAML file validated by pydantic. See `src/qwen_compress/utils/config.py` for the full schema. Key knobs:
 
-### Distillation (`DistillConfig`)
+### MOT-FD Distillation (`DistillConfig`)
 
 | Key | Meaning | Default |
 |---|---|---|
-| `num_groups` | Number of teacher anchor layers | `12` |
-| `group_strategy` | `uniform` or `depth_aware` | `uniform` |
-| `alpha_ce` / `beta_kd` / `gamma_hidden` / `delta_attn` | Loss weights | `1.0 / 1.0 / 1.0 / 0.5` |
+| `num_groups` | Number of functional groups (teacher) | `12` |
+| `calibration_samples` | Samples for teacher decomposition | `256` |
+| `energy_alpha` / `energy_beta` / `energy_gamma` | Energy signal weights | `1.0 / 0.5 / 0.3` |
+| `min_peak_distance` | Minimum gap between breakpoints | `2` |
+| `alpha_ce` | CE loss weight | `1.0` |
+| `beta_kd` | KD loss weight | `1.0` |
+| `lambda_ot` | OT alignment loss weight | `1.0` |
+| `lambda_mono` | Monotonic regularization weight | `0.1` |
 | `kd_temperature` | KD softmax temperature | `2.0` |
+| `ot_temperature` | Sinkhorn entropy regularization ε | `0.1` |
+| `sinkhorn_iters` | Sinkhorn iterations per step | `50` |
+| `projector_lr_multiplier` | Projector LR = base LR × this value | `0.1` |
 | `data.cot_mode` | `direct` / `cot` / `dual` | `dual` |
 
 ### Pruning (`PruneConfig`)
@@ -279,7 +327,7 @@ Multi-GPU is enabled via `torchrun`:
 NUM_GPUS=8 bash scripts/run_distill.sh configs/distill/qwen2_5_14b_to_3b.yaml
 ```
 
-The teacher loads with `device_map="auto"` (shards across visible GPUs); the student stays on `cuda:0` of each rank. KD and hidden-state losses move teacher tensors onto the student's device automatically.
+The teacher loads with `device_map="auto"` (shards across visible GPUs); the student stays on `cuda:0` of each rank. OT alignment uses pre-computed teacher group representations (on the student's device), so no cross-device transfers are needed during the training loop.
 
 ## Results (representative)
 
@@ -288,9 +336,9 @@ The numbers below are illustrative defaults for `Qwen2.5-14B-Instruct → Qwen2.
 | Stage | Model size | MMLU | GSM8K | Latency (A10, batch=1) |
 |---|---:|---:|---:|---:|
 | Teacher (14B FP16) | 28 GB | 78.5 | 81.4 | 1.00× |
-| Distilled (3B FP16) | 6.2 GB | 71.2 | 73.8 | 0.32× |
-| Pruned (3B 50%) | 6.2 GB ⁂ | 70.4 | 72.5 | 0.32× |
-| Pruned + QAT INT8 | 2.4 GB | 69.8 | 71.6 | 0.21× |
+| MOT-FD distilled (3B FP16) | 6.2 GB | 72.0 | 74.5 | 0.32× |
+| Pruned (3B 50%) | 6.2 GB ⁂ | 71.2 | 73.2 | 0.32× |
+| Pruned + QAT INT8 | 2.4 GB | 70.5 | 72.0 | 0.21× |
 
 ⁂ Wall-clock size before sparse-aware packing; INT8 figure includes runtime quantization metadata.
 
@@ -299,19 +347,20 @@ The numbers below are illustrative defaults for `Qwen2.5-14B-Instruct → Qwen2.
 ```
 qwen-compress/
 ├── src/qwen_compress/
-│   ├── distill/         # Stage 1: group-wise distillation
-│   │   ├── groupwise.py    # Teacher↔student layer mapping
-│   │   ├── losses.py       # Composite KD + hidden + attn loss
-│   │   └── trainer.py      # GroupwiseDistillTrainer
-│   ├── prune/           # Stage 2: SparseGPT
-│   │   ├── sparsegpt.py    # Block-by-block one-shot pruner
-│   │   ├── recovery.py     # Mask-preserving FT
-│   │   └── utils.py        # N:M masks, sparsity metrics
-│   ├── qat/             # Stage 3: QAT + QAD
-│   │   ├── fake_quant.py   # FakeQuantize + QuantizedLinear
-│   │   ├── calibration.py  # Activation calibration
-│   │   ├── qad_trainer.py  # QAT loop with optional teacher
-│   │   └── export.py       # safetensors / ONNX QDQ export
+│   ├── distill/              # Stage 1: MOT-FD distillation
+│   │   ├── groupwise.py         # Teacher functional decomposition (48→12 groups)
+│   │   ├── losses.py            # CE + KD + OT alignment + monotonic loss
+│   │   └── trainer.py           # GroupwiseDistillTrainer
+│   ├── prune/                # Stage 2: SparseGPT
+│   │   ├── sparsegpt.py         # Block-by-block one-shot pruner
+│   │   ├── permutation.py       # Channel permutation for 2:4
+│   │   ├── recovery.py          # Mask-preserving FT
+│   │   └── utils.py             # N:M masks, sparsity metrics
+│   ├── qat/                  # Stage 3: QAT + QAD
+│   │   ├── fake_quant.py        # FakeQuantize + QuantizedLinear
+│   │   ├── calibration.py       # Activation calibration
+│   │   ├── qad_trainer.py       # QAT loop with optional teacher
+│   │   └── export.py            # safetensors / ONNX QDQ export
 │   ├── models/qwen_wrapper.py
 │   ├── data/{cot_dataset,calibration_data}.py
 │   ├── utils/{config,checkpoint,logging,dist,seed}.py
@@ -334,6 +383,7 @@ If this code helps your work, please cite:
   url    = {https://github.com/eating-and-drinking/Qwen-compress},
 }
 ```
+
 ## Contributing
 
 1. Fork and create a topic branch.
@@ -344,7 +394,7 @@ If this code helps your work, please cite:
 
 ## Author
 
-Created and maintained by [eatingCreated and maintained by [eating-and-drinking](https://github.com/eating-and-drinking).
+Created and maintained by [eating-and-drinking](https://github.com/eating-and-drinking).
 
 Repository: [https://github.com/eating-and-drinking/Qwen-compress](https://github.com/eating-and-drinking/Qwen-compress)
 

@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Union
 
 import torch
 from torch import nn
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 
 from qwen_compress.utils.logging import get_logger
 
@@ -130,10 +130,7 @@ def load_qwen_tokenizer(
 
 def inspect_qwen_model(model: nn.Module) -> QwenModelInfo:
     """Extract architecture metadata from a loaded HF model."""
-    cfg = AutoConfig.from_pretrained(
-        model.config._name_or_path if hasattr(model.config, "_name_or_path") else None,
-        trust_remote_code=True,
-    ) if False else model.config
+    cfg = model.config
 
     return QwenModelInfo(
         num_hidden_layers=cfg.num_hidden_layers,

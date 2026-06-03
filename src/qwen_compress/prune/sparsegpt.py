@@ -137,9 +137,12 @@ class _SparseGPTLayer:
             mask_block = torch.ones_like(W1, dtype=torch.bool)
 
             if n == 0:
-                # Unstructured: derive a global threshold from |W| / diag(Hinv1)
+                # Unstructured: derive a global threshold from |W| / sqrt(diag(H⁻¹))
                 # within this block, choose lowest-importance entries to zero.
-                tmp = (W1 ** 2) / (torch.diag(Hinv1).reshape((1, -1)) ** 2)
+                # Hinv1 is the upper-triangular Cholesky factor (H⁻¹ = UᵀU).
+                # The true diagonal of H⁻¹ is column-wise ‖U_{:,j}‖².
+                diag_hinv = (Hinv1 ** 2).sum(dim=0)  # [block_cols]
+                tmp = (W1 ** 2) / diag_hinv.reshape((1, -1))
                 k = int(round(sparsity * tmp.numel()))
                 if k > 0:
                     thresh = torch.kthvalue(tmp.flatten(), k).values
@@ -156,8 +159,9 @@ class _SparseGPTLayer:
                     if j_local % m == 0 and base + m <= block_cols:
                         # Choose which n of the next m columns to zero per row.
                         chunk = W1[:, base : base + m]
-                        chunk_d = torch.diag(Hinv1[base : base + m, base : base + m])
-                        score = (chunk ** 2) / (chunk_d.unsqueeze(0) ** 2)
+                        chunk_hinv = Hinv1[base : base + m, base : base + m]
+                        chunk_diag = (chunk_hinv ** 2).sum(dim=0)  # [m]
+                        score = (chunk ** 2) / chunk_diag.unsqueeze(0)
                         _, idx = torch.topk(score, k=n, dim=-1, largest=False)
                         m_sub = torch.ones_like(chunk, dtype=torch.bool)
                         m_sub.scatter_(-1, idx, False)
@@ -244,7 +248,8 @@ class SparseGPTPruner:
             raise RuntimeError("Model does not have `model.embed_tokens` (not a Qwen-like LM?).") from e
 
         cached_inputs: List[torch.Tensor] = []
-        cached_kwargs: Dict[str, torch.Tensor] = {}
+        cached_attn_masks: List[torch.Tensor] = []
+        cached_pos_ids: List[Optional[torch.Tensor]] = []
 
         class _Catcher(nn.Module):
             def __init__(self, inner: nn.Module) -> None:
@@ -253,28 +258,32 @@ class SparseGPTPruner:
 
             def forward(self, hidden_states, *args, **kwargs):
                 cached_inputs.append(hidden_states.detach())
-                if "attention_mask" in kwargs and "attention_mask" not in cached_kwargs:
-                    cached_kwargs["attention_mask"] = kwargs["attention_mask"]
-                if "position_ids" in kwargs and "position_ids" not in cached_kwargs:
-                    cached_kwargs["position_ids"] = kwargs["position_ids"]
+                cached_attn_masks.append(
+                    kwargs.get("attention_mask", torch.ones(1, hidden_states.size(1)))
+                )
+                cached_pos_ids.append(kwargs.get("position_ids"))
                 raise _StopIterationSignal
 
-        layers[0] = _Catcher(layers[0])
-
-        for batch in calibration_loader:
-            input_ids = batch.to(device) if isinstance(batch, torch.Tensor) else batch["input_ids"].to(device)
-            try:
-                self.model(input_ids=input_ids, use_cache=False)
-            except _StopIterationSignal:
-                continue
-        layers[0] = layers[0].inner
+        # Wrap first layer for input capture with exception safety.
+        original_layer0 = layers[0]
+        layers[0] = _Catcher(original_layer0)
+        try:
+            for batch in calibration_loader:
+                input_ids = batch.to(device) if isinstance(batch, torch.Tensor) else batch["input_ids"].to(device)
+                try:
+                    self.model(input_ids=input_ids, use_cache=False)
+                except _StopIterationSignal:
+                    continue
+        finally:
+            layers[0] = original_layer0
 
         if not cached_inputs:
             raise RuntimeError("No calibration inputs were captured.")
 
         hidden_states = torch.cat(cached_inputs, dim=0)
-        attn_mask = cached_kwargs.get("attention_mask")
-        pos_ids = cached_kwargs.get("position_ids")
+        # Concatenate per-sample attention masks for per-sample replay.
+        attn_masks = torch.cat([m.to(device) for m in cached_attn_masks], dim=0)
+        pos_ids = cached_pos_ids[0] if cached_pos_ids else None
         _logger.info(f"Captured {hidden_states.size(0)} calibration sequences.")
 
         recon_errors: Dict[str, float] = {}
@@ -293,15 +302,16 @@ class SparseGPTPruner:
                 w.register()
 
             # Collect activations for this block by replaying the cached inputs.
-            new_states: List[torch.Tensor] = []
+            # Each sample uses its own attention_mask for correct attention.
+            # Outputs are discarded — we only need the forward to trigger Hessian hooks.
             for i in range(hidden_states.size(0)):
                 inp = hidden_states[i : i + 1]
-                out = block(
+                sample_mask = attn_masks[i : i + 1]
+                block(
                     inp,
-                    attention_mask=attn_mask,
+                    attention_mask=sample_mask,
                     position_ids=pos_ids,
                 )
-                new_states.append(out[0] if isinstance(out, tuple) else out)
             for w in wrappers.values():
                 w.unregister()
 
@@ -318,9 +328,10 @@ class SparseGPTPruner:
             new_states = []
             for i in range(hidden_states.size(0)):
                 inp = hidden_states[i : i + 1]
+                sample_mask = attn_masks[i : i + 1]
                 out = block(
                     inp,
-                    attention_mask=attn_mask,
+                    attention_mask=sample_mask,
                     position_ids=pos_ids,
                 )
                 new_states.append((out[0] if isinstance(out, tuple) else out).detach())

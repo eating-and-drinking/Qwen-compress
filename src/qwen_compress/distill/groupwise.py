@@ -1,184 +1,344 @@
 # Copyright 2024 qwen-compress contributors
 # Licensed under the Apache License, Version 2.0.
-"""Group-wise teacher-student layer mapping.
+"""Monotonic Optimal Transport Functional Distillation (MOT-FD).
 
-The idea: when distilling a 14B teacher (e.g. 40 decoder layers) into a 3B
-student (e.g. 32 layers), naive last-layer logit matching wastes the rich
-intermediate signal the teacher offers. Group-wise distillation splits the
-teacher into ``G`` contiguous *groups* of blocks, picks one *anchor layer* per
-group as the supervision target, and maps it to the closest-fraction-depth
-student layer. The student is then trained to match those anchors' hidden
-states and attention maps.
+Teacher functional decomposition (48 layers → 12 groups):
 
-Two strategies are supported:
+1. Extract layer representations z_l^T = E_{x~D}[h_l^T(x)]
+2. Compute representation dynamics energy E(l)
+3. Detect change points via peak detection
+4. Build functional groups from breakpoints
+5. Compute group representations g_k^T = mean(G_k^T)
 
-* ``uniform``     : groups have equal size; the anchor is the *last* block of
-                    each group (most informative output of that group).
-* ``depth_aware`` : groups are sized proportionally to depth so that earlier
-                    layers (which encode more local features) get more anchors
-                    than late layers.
+During training, Optimal Transport aligns student layers to these group
+representations with a monotonicity constraint.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Literal, Sequence
+from typing import List
+
+import torch
 
 from qwen_compress.utils.logging import get_logger
 
 _logger = get_logger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class GroupAssignment:
-    """Layer-level mapping from teacher anchors to student layers.
+    """Result of teacher functional decomposition.
 
     Attributes
     ----------
-    teacher_anchor_layers:
-        Sorted list of teacher layer indices (0-based) that are used as
-        distillation targets — one per group.
-    student_target_layers:
-        For each teacher anchor, the matched student layer index.
-    num_groups:
-        ``len(teacher_anchor_layers)``.
+    groups:
+        List of 12 functional groups, each containing teacher layer indices.
+    group_representations:
+        Pre-computed group centroids ``g_k^T`` of shape ``[num_groups, hidden_dim]``.
+        These are fixed during training and used in the OT cost matrix.
+    energy_signal:
+        The computed representation dynamics energy E(l) for layers 1..L-1.
+    breakpoints:
+        Indices of the 11 detected change-points (b_1, ..., b_11).
     """
 
-    teacher_anchor_layers: List[int]
-    student_target_layers: List[int]
+    groups: List[List[int]]
+    group_representations: torch.Tensor  # [num_groups, hidden_dim]
+    energy_signal: torch.Tensor  # [num_layers - 1]
+    breakpoints: List[int]
 
     @property
     def num_groups(self) -> int:
-        return len(self.teacher_anchor_layers)
+        return len(self.groups)
+
+    @property
+    def teacher_anchor_layers(self) -> List[int]:
+        """Last layer index of each group (for backwards compat with old code)."""
+        return [g[-1] for g in self.groups]
+
+    @property
+    def student_target_layers(self) -> List[int]:
+        """Not used in MOT-FD; provided for backwards compat."""
+        return list(range(len(self.groups)))
 
     def pairs(self) -> List[tuple[int, int]]:
-        """Convenience: ``list(zip(teacher_anchors, student_targets))``."""
+        """Not used in MOT-FD; provided for backwards compat."""
         return list(zip(self.teacher_anchor_layers, self.student_target_layers))
 
 
-def _uniform_anchors(num_layers: int, num_groups: int) -> List[int]:
-    """Split [0, num_layers) into ``num_groups`` contiguous chunks; pick last."""
-    if num_groups <= 0 or num_groups > num_layers:
-        raise ValueError(
-            f"num_groups={num_groups} must be in (0, num_layers={num_layers}]"
-        )
-    # Compute group boundaries via numpy-free integer split.
-    boundaries: List[int] = []
-    base, extra = divmod(num_layers, num_groups)
-    cursor = 0
-    for g in range(num_groups):
-        size = base + (1 if g < extra else 0)
-        cursor += size
-        boundaries.append(cursor - 1)  # last index of this group
-    return boundaries
+def compute_energy_signal(
+    layer_reps: torch.Tensor,
+    alpha: float = 1.0,
+    beta: float = 0.5,
+    gamma: float = 0.3,
+) -> torch.Tensor:
+    """Compute representation dynamics energy.
 
-
-def _depth_aware_anchors(num_layers: int, num_groups: int) -> List[int]:
-    """Allocate more groups to early/middle layers (sqrt-weighted)."""
-    import math
-
-    if num_groups <= 0 or num_groups > num_layers:
-        raise ValueError(
-            f"num_groups={num_groups} must be in (0, num_layers={num_layers}]"
-        )
-    # Weight each layer by sqrt of (num_layers - i) so early layers get bigger weight.
-    weights = [math.sqrt(num_layers - i) for i in range(num_layers)]
-    total = sum(weights)
-    cum = 0.0
-    anchors: List[int] = []
-    target = total / num_groups
-    next_threshold = target
-    for i, w in enumerate(weights):
-        cum += w
-        if cum >= next_threshold and len(anchors) < num_groups:
-            anchors.append(i)
-            next_threshold += target
-    # Guarantee exactly num_groups anchors and that the last layer is included.
-    while len(anchors) < num_groups:
-        candidate = num_layers - 1
-        while candidate in anchors and candidate > 0:
-            candidate -= 1
-        anchors.append(candidate)
-    anchors = sorted(set(anchors))[:num_groups]
-    if anchors[-1] != num_layers - 1:
-        anchors[-1] = num_layers - 1
-    return anchors
-
-
-def build_group_assignment(
-    teacher_num_layers: int,
-    student_num_layers: int,
-    num_groups: int,
-    strategy: Literal["uniform", "depth_aware"] = "uniform",
-) -> GroupAssignment:
-    """Build the teacher-to-student anchor mapping.
+    E(l) = α·||z_{l+1} - z_l|| + β·||z_{l+1} - 2z_l + z_{l-1}|| + γ·(1 - cos(z_{l+1}, z_l))
 
     Parameters
     ----------
-    teacher_num_layers:
-        Number of decoder layers in the teacher.
-    student_num_layers:
-        Number of decoder layers in the student.
-    num_groups:
-        Number of supervision points. Must satisfy
-        ``1 <= num_groups <= min(teacher_num_layers, student_num_layers)``.
-    strategy:
-        ``"uniform"`` or ``"depth_aware"``.
+    layer_reps:
+        Teacher layer representations, shape ``[num_layers, hidden_dim]``.
+    alpha, beta, gamma:
+        Weights for the three energy components.
 
     Returns
     -------
-    A :class:`GroupAssignment`.
+    Energy signal of shape ``[num_layers - 1]`` (E(1) to E(L-1)).
+    """
+    num_layers, _ = layer_reps.shape
+    if num_layers < 3:
+        raise ValueError(f"Need at least 3 layers for energy computation, got {num_layers}")
 
-    Notes
-    -----
-    For each teacher anchor at depth ``d_T``, the student target is set to
-    ``round((d_T + 1) / teacher_num_layers * student_num_layers) - 1``, capped
-    to ``[0, student_num_layers - 1]``. This preserves relative depth.
+    z = layer_reps  # [L, D]
+
+    # First-order difference: ||z_{l+1} - z_l||
+    dz = z[1:] - z[:-1]  # [L-1, D]
+    first_order = dz.norm(dim=-1)  # [L-1]
+
+    # Second-order difference: ||z_{l+1} - 2z_l + z_{l-1}||
+    d2z = z[2:] - 2 * z[1:-1] + z[:-2]  # [L-2, D]
+    second_order = torch.cat([
+        torch.zeros(1, device=z.device, dtype=z.dtype),
+        d2z.norm(dim=-1),
+    ])  # [L-1]
+
+    # Cosine distance: 1 - cos(z_{l+1}, z_l)
+    z_l = z[:-1]  # [L-1, D]
+    z_next = z[1:]  # [L-1, D]
+    cos_sim = (z_l * z_next).sum(dim=-1) / (
+        z_l.norm(dim=-1) * z_next.norm(dim=-1) + 1e-8
+    )
+    cosine_dist = 1.0 - cos_sim  # [L-1]
+
+    energy = alpha * first_order + beta * second_order + gamma * cosine_dist
+    return energy
+
+
+def detect_breakpoints(
+    energy: torch.Tensor,
+    num_breakpoints: int = 11,
+    min_distance: int = 2,
+) -> List[int]:
+    """Detect change points via peak detection on the energy signal.
+
+    Finds local maxima in E(l), sorts by magnitude, and picks the top-K
+    while enforcing a minimum distance constraint.
+
+    Parameters
+    ----------
+    energy:
+        Energy signal of shape ``[L-1]``.
+    num_breakpoints:
+        Number of breakpoints to detect (default: 11 → 12 groups).
+    min_distance:
+        Minimum distance between adjacent breakpoints.
+
+    Returns
+    -------
+    Sorted list of breakpoint indices (1-indexed layer positions).
+    """
+    energy_np = energy.detach().cpu().numpy()
+    L = len(energy_np)
+
+    # Find local maxima
+    candidates = []
+    for i in range(1, L - 1):
+        if energy_np[i] > energy_np[i - 1] and energy_np[i] > energy_np[i + 1]:
+            candidates.append((i, energy_np[i]))
+
+    # Sort by energy magnitude (descending)
+    candidates.sort(key=lambda x: x[1], reverse=True)
+
+    # Greedy selection with min_distance
+    selected: List[int] = []
+    for idx, _ in candidates:
+        # idx is position in energy signal (0-indexed),
+        # the breakpoint is idx+1 in layer space (1-indexed)
+        bp = idx + 1
+        if all(abs(bp - s) >= min_distance for s in selected):
+            selected.append(bp)
+        if len(selected) >= num_breakpoints:
+            break
+
+    # If not enough peaks found, fill with evenly-spaced fallbacks.
+    # Real peaks take priority — fallbacks only fill the remaining slots.
+    if len(selected) < num_breakpoints:
+        step = (L + 1) // (num_breakpoints + 1)  # num_layers // num_groups
+        fallback = [step * (i + 1) for i in range(num_breakpoints)]
+        for fb in fallback:
+            if len(selected) >= num_breakpoints:
+                break
+            if fb not in selected and all(abs(fb - s) >= min_distance for s in selected):
+                selected.append(fb)
+    selected.sort()
+    _logger.info(f"Detected {len(selected)} breakpoints: {selected}")
+    return selected
+
+
+def build_functional_groups(
+    num_layers: int,
+    breakpoints: List[int],
+) -> List[List[int]]:
+    """Build functional groups from breakpoints.
+
+    G_k = [b_{k-1}, b_k) where b_0=0, b_{num_groups}=num_layers.
+
+    Parameters
+    ----------
+    num_layers:
+        Total number of teacher layers.
+    breakpoints:
+        Sorted list of breakpoints (b_1, ..., b_{G-1}).
+
+    Returns
+    -------
+    List of G groups, each containing layer indices.
+    """
+    boundaries = [0] + sorted(breakpoints) + [num_layers]
+    groups = []
+    for k in range(len(boundaries) - 1):
+        start = boundaries[k]
+        end = boundaries[k + 1]
+        groups.append(list(range(start, end)))
+    return groups
+
+
+def compute_group_representations(
+    groups: List[List[int]],
+    layer_reps: torch.Tensor,
+) -> torch.Tensor:
+    """Compute group representations: g_k^T = mean of z_l for l in G_k.
+
+    Parameters
+    ----------
+    groups:
+        List of functional groups.
+    layer_reps:
+        Teacher layer representations, shape ``[num_layers, hidden_dim]``.
+
+    Returns
+    -------
+    Group representations, shape ``[num_groups, hidden_dim]``.
+    """
+    reps = []
+    for g in groups:
+        g_reps = layer_reps[g]  # [|G_k|, D]
+        reps.append(g_reps.mean(dim=0))
+    return torch.stack(reps, dim=0)  # [num_groups, D]
+
+
+def build_group_assignment(
+    teacher_layer_reps: torch.Tensor,
+    num_groups: int = 12,
+    energy_alpha: float = 1.0,
+    energy_beta: float = 0.5,
+    energy_gamma: float = 0.3,
+    min_peak_distance: int = 2,
+) -> GroupAssignment:
+    """Main entry point: teacher functional decomposition via MOT-FD.
+
+    1. Compute representation dynamics energy E(l).
+    2. Detect change points (breakpoints) via peak detection.
+    3. Build functional groups.
+    4. Compute group representations g_k^T.
+
+    Parameters
+    ----------
+    teacher_layer_reps:
+        Teacher layer representations of shape ``[num_layers, hidden_dim]``.
+        Obtain by running calibration data through the teacher and averaging
+        hidden states per layer over batch and sequence dimensions.
+    num_groups:
+        Number of functional groups (default: 12).
+    energy_alpha, energy_beta, energy_gamma:
+        Weights for the three energy components.
+    min_peak_distance:
+        Minimum distance between detected breakpoints.
+
+    Returns
+    -------
+    A :class:`GroupAssignment` with groups, representations, energy, and breakpoints.
+    """
+    num_layers = teacher_layer_reps.shape[0]
+    if num_groups > num_layers:
+        raise ValueError(
+            f"num_groups={num_groups} cannot exceed num_layers={num_layers}"
+        )
+
+    # Step 1: Compute energy signal
+    energy = compute_energy_signal(
+        teacher_layer_reps,
+        alpha=energy_alpha,
+        beta=energy_beta,
+        gamma=energy_gamma,
+    )
+
+    # Step 2: Detect breakpoints
+    num_breakpoints = num_groups - 1
+    breakpoints = detect_breakpoints(
+        energy,
+        num_breakpoints=num_breakpoints,
+        min_distance=min_peak_distance,
+    )
+
+    # Step 3: Build functional groups
+    groups = build_functional_groups(num_layers, breakpoints)
+
+    # Step 4: Compute group representations
+    group_reps = compute_group_representations(groups, teacher_layer_reps)
+
+    _logger.info(
+        f"Built {len(groups)} functional groups from {num_layers} teacher layers: "
+        f"group sizes={[len(g) for g in groups]}, "
+        f"breakpoints={breakpoints}"
+    )
+
+    return GroupAssignment(
+        groups=groups,
+        group_representations=group_reps,
+        energy_signal=energy,
+        breakpoints=breakpoints,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy API — kept for backwards compatibility with QAT trainer.
+# ---------------------------------------------------------------------------
+
+
+def build_group_assignment_legacy(
+    teacher_num_layers: int,
+    student_num_layers: int,
+    num_groups: int,
+    strategy: str = "uniform",
+) -> GroupAssignment:
+    """Legacy group assignment using uniform strategy.
+
+    This is kept for QAT trainer compatibility. In MOT-FD, the proper entry
+    point is :func:`build_group_assignment` with teacher layer representations.
+
+    Returns a GroupAssignment with empty group_representations (since no
+    calibration pass was done). The QAT trainer uses its own hidden-state
+    hooks for cosine matching, not OT alignment.
     """
     if num_groups > min(teacher_num_layers, student_num_layers):
         raise ValueError(
-            f"num_groups={num_groups} cannot exceed min(teacher_num_layers, "
-            f"student_num_layers) = {min(teacher_num_layers, student_num_layers)}"
+            f"num_groups={num_groups} cannot exceed min(teacher, student) layers"
         )
+    base, extra = divmod(teacher_num_layers, num_groups)
+    cursor = 0
+    groups = []
+    for g in range(num_groups):
+        size = base + (1 if g < extra else 0)
+        groups.append(list(range(cursor, cursor + size)))
+        cursor += size
 
-    if strategy == "uniform":
-        teacher_anchors = _uniform_anchors(teacher_num_layers, num_groups)
-    elif strategy == "depth_aware":
-        teacher_anchors = _depth_aware_anchors(teacher_num_layers, num_groups)
-    else:
-        raise ValueError(f"Unknown strategy {strategy!r}")
-
-    student_targets: List[int] = []
-    for d_t in teacher_anchors:
-        # Map (d_t + 1)/T_L  to  s_L positions, then take the 1-indexed -> 0-indexed.
-        rel = (d_t + 1) / teacher_num_layers
-        s_idx = int(round(rel * student_num_layers)) - 1
-        s_idx = max(0, min(student_num_layers - 1, s_idx))
-        student_targets.append(s_idx)
-
-    # Ensure student targets are strictly increasing — otherwise some groups
-    # share a student layer and we lose supervision diversity.
-    student_targets = _enforce_monotonic(student_targets, student_num_layers - 1)
-
-    assignment = GroupAssignment(
-        teacher_anchor_layers=teacher_anchors,
-        student_target_layers=student_targets,
+    return GroupAssignment(
+        groups=groups,
+        group_representations=torch.empty(0),  # placeholder
+        energy_signal=torch.empty(0),
+        breakpoints=[g[-1] for g in groups[:-1]],
     )
-    _logger.info(
-        f"Built group assignment ({strategy}): "
-        f"teacher anchors={teacher_anchors}, student targets={student_targets}"
-    )
-    return assignment
-
-
-def _enforce_monotonic(seq: Sequence[int], max_value: int) -> List[int]:
-    """Adjust ``seq`` (in-place semantics) to be strictly increasing in [0, max_value]."""
-    out = list(seq)
-    for i in range(1, len(out)):
-        if out[i] <= out[i - 1]:
-            out[i] = min(out[i - 1] + 1, max_value)
-    # Backward pass to keep within bound.
-    for i in range(len(out) - 2, -1, -1):
-        if out[i] >= out[i + 1]:
-            out[i] = max(0, out[i + 1] - 1)
-    return out
