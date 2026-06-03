@@ -1,55 +1,55 @@
-# CoT Generator
+﻿# CoT Generator
 
-批量生成高质量 Chain-of-Thought (CoT) 训练数据，用于大模型监督微调。
-
----
-
-## 功能特性
-
-- **批量生成**：基于 vLLM 的高效批量推理，支持多卡并行
-- **Self-Instruct 扩充**：自动扩充问题池，达到目标数据量
-- **质量过滤**：自动去重、步骤完整性检查
-- **交叉验证**：可选双模型一致性校验（14B生成 + 7B验证）
-- **双模式输出**：同时生成 CoT 模式和 Direct 模式训练数据
-- **标准化格式**：输出标准 SFT 训练格式，无缝对接主流训练框架
+Batch generate high-quality Chain-of-Thought (CoT) training data for large model supervised fine-tuning.
 
 ---
 
-## 快速开始
+## Features
 
-### 1. 安装依赖
+- **Batch Generation**: Efficient batch inference based on vLLM, supporting multi-GPU parallel
+- **Self-Instruct Expansion**: Automatically expand question pool to reach target data size
+- **Quality Filtering**: Automatic deduplication, step completeness checking
+- **Cross Validation**: Optional dual-model consistency verification (14B generation + 7B verification)
+- **Dual-Mode Output**: Generate both CoT and Direct mode training data simultaneously
+- **Standardized Format**: Output standard SFT training format, seamlessly integrated with mainstream training frameworks
+
+---
+
+## Quick Start
+
+### 1. Install Dependencies
 
 ```bash
-# 安装基础依赖
+# Install basic dependencies
 pip install -r requirements.txt
 
-# 如需使用 HuggingFace datasets（可选）
+# Optional: Install HuggingFace datasets
 pip install datasets
 ```
 
-### 2. 运行生成
+### 2. Run Generation
 
 ```bash
-# 使用默认配置生成 12 万条数据
+# Generate 120K examples with default config
 python run.py generate
 
-# 生成指定数量
+# Generate specified number
 python run.py generate --target 50000
 
-# 指定输出目录
+# Specify output directory
 python run.py generate --output_dir /data/my_cot_dataset
 
-# 禁用交叉验证（更快，适合单卡）
+# Disable cross validation (faster, suitable for single GPU)
 python run.py generate --no_cross_val
 ```
 
-### 3. 混合 CoT/Direct 训练集
+### 3. Merge CoT/Direct Training Set
 
 ```bash
 python run.py merge --output_dir outputs/cot_dataset --cot_ratio 0.7
 ```
 
-### 4. 查看统计
+### 4. View Statistics
 
 ```bash
 python run.py stats --output_dir outputs/cot_dataset
@@ -57,19 +57,19 @@ python run.py stats --output_dir outputs/cot_dataset
 
 ---
 
-## 配置说明
+## Configuration
 
-配置文件：`configs/pipeline.json`
+Config file: `configs/pipeline.json`
 
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `target_total` | 120000 | 目标生成条数 |
-| `self_instruct_count` | 35000 | Self-Instruct 扩充的问题数 |
-| `cot_mix_ratio` | 0.7 | 最终混合集中 CoT 条目占比 |
-| `enable_cross_validation` | false | 是否启用双模型交叉验证 |
-| `flush_every` | 500 | 每 N 条刷盘一次 |
+| Field | Default | Description |
+|-------|---------|-------------|
+| `target_total` | 120000 | Target number of generated examples |
+| `self_instruct_count` | 35000 | Number of questions to expand via Self-Instruct |
+| `cot_mix_ratio` | 0.7 | Ratio of CoT examples in final mixed dataset |
+| `enable_cross_validation` | false | Enable dual-model cross validation |
+| `flush_every` | 500 | Flush to disk every N examples |
 
-### 生成器配置
+### Generator Configuration
 
 ```json
 {
@@ -82,14 +82,14 @@ python run.py stats --output_dir outputs/cot_dataset
     "top_p": 0.9,
     "batch_size": 64,
     "min_thinking_length": 100,
-    "required_steps": ["步骤1", "步骤2", "步骤3"]
+    "required_steps": ["Step 1", "Step 2", "Step 3"]
   }
 }
 ```
 
-### 数据源配置
+### Data Sources Configuration
 
-支持 HuggingFace 数据集和本地 JSONL 文件：
+Support HuggingFace datasets and local JSONL files:
 
 ```json
 {
@@ -112,52 +112,52 @@ python run.py stats --output_dir outputs/cot_dataset
 
 ---
 
-## 支持的数据源
+## Supported Data Sources
 
-| 数据源 | 类型 | 领域 | 说明 |
-|-------|------|------|------|
-| math | HuggingFace | 数学 | 竞赛数学题 |
-| logiqa | HuggingFace | 逻辑 | 逻辑推理题 |
-| ceval | HuggingFace | 综合 | 中文考试数据集 |
-| mbpp | HuggingFace | 代码 | Python 编程题 |
-| local | JSONL | 自定义 | 本地种子文件 |
+| Source | Type | Domain | Description |
+|--------|------|--------|-------------|
+| math | HuggingFace | Mathematics | Competition math problems |
+| logiqa | HuggingFace | Logic | Logical reasoning questions |
+| ceval | HuggingFace | General | Chinese exam dataset |
+| mbpp | HuggingFace | Code | Python programming problems |
+| local | JSONL | Custom | Local seed files |
 
 ---
 
-## 输出文件
+## Output Files
 
 ```
 outputs/cot_dataset/
-├── train_cot.jsonl      # CoT 模式训练集（含 <thinking>...</thinking>）
-├── train_direct.jsonl   # Direct 模式训练集（只含答案）
-├── train_mixed.jsonl    # 混合训练集（默认 7:3 比例）
-├── val.jsonl            # 验证集（从训练集拆分 5%）
-├── test.jsonl           # 测试集（从训练集拆分 5%）
-└── metadata.json        # 统计信息和元数据
+ train_cot.jsonl      # CoT mode training set (with <thinking>...</thinking>)
+ train_direct.jsonl   # Direct mode training set (answer only)
+ train_mixed.jsonl    # Mixed training set (default 7:3 ratio)
+ val.jsonl            # Validation set (5% split from training)
+ test.jsonl           # Test set (5% split from training)
+ metadata.json        # Statistics and metadata
 ```
 
-### 数据格式
+### Data Format
 
-每条数据格式（`train_mixed.jsonl`）：
+Single example format (`train_mixed.jsonl`):
 
 ```json
 {
   "id": "abc12345",
   "domain": "math",
-  "question": "求解方程：2x + 5 = 15",
-  "thinking": "步骤1：理解问题...步骤2：移项...",
+  "question": "Solve the equation: 2x + 5 = 15",
+  "thinking": "Step 1: Understand the problem... Step 2: Isolate x...",
   "answer": "x = 5",
   "source": "math",
   "sft_cot": {
     "messages": [
-      {"role": "system", "content": "你是一个逻辑推理专家..."},
-      {"role": "user", "content": "求解方程：2x + 5 = 15"},
-      {"role": "assistant", "content": "<thinking>...步骤...</thinking>\n\n<answer>x = 5</answer>"}
+      {"role": "system", "content": "You are a logical reasoning expert..."},
+      {"role": "user", "content": "Solve the equation: 2x + 5 = 15"},
+      {"role": "assistant", "content": "<thinking>...steps...</thinking>\n\n<answer>x = 5</answer>"}
     ]
   },
   "sft_direct": {
     "messages": [
-      {"role": "user", "content": "求解方程：2x + 5 = 15"},
+      {"role": "user", "content": "Solve the equation: 2x + 5 = 15"},
       {"role": "assistant", "content": "x = 5"}
     ]
   }
@@ -166,61 +166,61 @@ outputs/cot_dataset/
 
 ---
 
-## 添加自定义种子问题
+## Add Custom Seed Questions
 
-在 `data/seeds/` 目录下放 JSONL 文件，每行格式：
+Place JSONL files in `data/seeds/` directory, with each line formatted as:
 
 ```json
-{"question": "你的问题", "domain": "math"}
+{"question": "Your question", "domain": "math"}
 ```
 
-支持的 domain：`math` / `logic` / `code` / `common_sense` / `science` / `language` / `general`
+Supported domains: `math` / `logic` / `code` / `common_sense` / `science` / `language` / `general`
 
-然后在 `configs/pipeline.json` 的 `data_sources.local_sources` 中添加路径即可。
-
----
-
-## 硬件参考
-
-| 配置 | 吞吐量估算 | 12万条耗时 |
-|------|-----------|-----------|
-| 1x A100 80G | ~800 tok/s | ~25 小时 |
-| 2x A100 80G | ~1500 tok/s | ~13 小时 |
-| 4x A100 80G | ~2800 tok/s | ~7 小时 |
-
-> **建议**：原始生成量设为目标的 1.3 倍（过滤率约 20-30%）。
+Then add the path in `data_sources.local_sources` in `configs/pipeline.json`.
 
 ---
 
-## 目录结构
+## Hardware Reference
+
+| Configuration | Throughput Estimate | Time for 120K Examples |
+|--------------|---------------------|------------------------|
+| 1x A100 80G | ~800 tok/s | ~25 hours |
+| 2x A100 80G | ~1500 tok/s | ~13 hours |
+| 4x A100 80G | ~2800 tok/s | ~7 hours |
+
+> **Recommendation**: Set initial generation to 1.3x target (filter rate ~20-30%).
+
+---
+
+## Directory Structure
 
 ```
 cot_generator/
-├── configs/
-│   └── pipeline.json          # 默认配置文件
-├── data/seeds/
-│   └── example_seeds.jsonl    # 种子问题示例
-├── __init__.py                # 模块导出
-├── data_loader.py             # 多源数据加载器
-├── expander.py                # Self-Instruct 扩充器
-├── formatter.py               # SFT 格式输出
-├── generator.py               # 核心生成器（vLLM）
-├── pipeline.py                # 端到端主控流程
-├── prompts.py                 # Prompt 模板库
-├── validator.py               # 交叉验证模块
-├── run.py                     # CLI 入口
-├── requirements.txt           # 依赖列表
-└── README.md                  # 本文件
+ configs/
+    pipeline.json          # Default configuration file
+ data/seeds/
+    example_seeds.jsonl    # Example seed questions
+ __init__.py                # Module exports
+ data_loader.py             # Multi-source data loader
+ expander.py                # Self-Instruct expander
+ formatter.py               # SFT format output
+ generator.py               # Core generator (vLLM)
+ pipeline.py                # End-to-end main pipeline
+ prompts.py                 # Prompt template library
+ validator.py               # Cross validation module
+ run.py                     # CLI entry
+ requirements.txt           # Dependencies list
+ README.md                  # This file
 ```
 
 ---
 
-## 作为模块导入
+## Import as Module
 
 ```python
 from qwen_compress.cot_generator import run_pipeline
 
-# 配置
+# Configuration
 cfg = {
     "output_dir": "outputs/my_dataset",
     "target_total": 50000,
@@ -235,12 +235,12 @@ cfg = {
     }
 }
 
-# 运行
+# Run
 run_pipeline(cfg)
 ```
 
 ---
 
-## 许可证
+## License
 
 Apache License 2.0
