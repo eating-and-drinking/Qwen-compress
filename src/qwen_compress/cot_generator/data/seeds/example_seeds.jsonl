@@ -1,25 +1,25 @@
-{"id": "seed_math_001", "question": "A train travels at 90 km/h. How far does it travel in 2.5 hours?", "domain": "math"}
-{"id": "seed_math_002", "question": "If x + 3 = 7, what is the value of 2x - 1?", "domain": "math"}
-{"id": "seed_math_003", "question": "A rectangle has length 12 cm and width 8 cm. What is its area?", "domain": "math"}
-{"id": "seed_math_004", "question": "John has 48 apples. He gives 1/3 to Mary and buys 8 more. How many apples does he have now?", "domain": "math"}
-{"id": "seed_math_005", "question": "What is the square root of 625?", "domain": "math"}
-{"id": "seed_logic_001", "question": "All cats are mammals. Fluffy is a cat. Is Fluffy a mammal?", "domain": "logic"}
-{"id": "seed_logic_002", "question": "If it rains, the ground gets wet. The ground is wet. Can we conclude it is raining?", "domain": "logic"}
-{"id": "seed_logic_003", "question": "If all birds can fly and penguins are birds, can penguins fly?", "domain": "logic"}
-{"id": "seed_logic_004", "question": "No fish can breathe air. A shark is a fish. Can a shark breathe air?", "domain": "logic"}
-{"id": "seed_logic_005", "question": "Some dogs are brown. Max is a dog. Is Max brown?", "domain": "logic"}
-{"id": "seed_code_001", "question": "What is the output of: print(len([1, 2, 3, 4]))", "domain": "code"}
-{"id": "seed_code_002", "question": "What does Python's range(5) produce?", "domain": "code"}
-{"id": "seed_code_003", "question": "Explain what the following code does:\nx = 5\ny = x ** 2\nprint(y)", "domain": "code"}
-{"id": "seed_code_004", "question": "What is the result of 3 * 'hello' in Python?", "domain": "code"}
-{"id": "seed_code_005", "question": "What does the `append()` method do in Python lists?", "domain": "code"}
-{"id": "seed_science_001", "question": "Why do objects fall to the ground when dropped?", "domain": "science"}
-{"id": "seed_science_002", "question": "What gas do plants absorb from the air for photosynthesis?", "domain": "science"}
-{"id": "seed_science_003", "question": "What is the boiling point of water at sea level?", "domain": "science"}
-{"id": "seed_science_004", "question": "Which planet is closest to the Sun?", "domain": "science"}
-{"id": "seed_science_005", "question": "What type of rock is formed from cooled magma?", "domain": "science"}
-{"id": "seed_common_001", "question": "Why is the sky blue?", "domain": "common_sense"}
-{"id": "seed_common_002", "question": "Why do we wear sunglasses on sunny days?", "domain": "common_sense"}
-{"id": "seed_common_003", "question": "Why do leaves change color in autumn?", "domain": "common_sense"}
-{"id": "seed_common_004", "question": "Why should you not touch electrical appliances with wet hands?", "domain": "common_sense"}
-{"id": "seed_common_005", "question": "Why do you feel colder when you wet your skin?", "domain": "common_sense"}
+{"id": "seed_math_001", "question": "A circle with radius 5 cm is inscribed in a square. What is the area of the square that is not covered by the circle? (Use π = 3.14)", "domain": "math"}
+{"id": "seed_math_002", "question": "A car travels from city A to city B at 60 mph. On the return trip, it travels at 45 mph. What is the average speed for the entire round trip?", "domain": "math"}
+{"id": "seed_math_003", "question": "Solve the equation: 2x² - 5x - 3 = 0", "domain": "math"}
+{"id": "seed_math_004", "question": "A factory produces 1500 units in 5 days. At this rate, how many units can it produce in 3 weeks?", "domain": "math"}
+{"id": "seed_math_005", "question": "What is the probability of rolling a sum of 7 with two standard six-sided dice?", "domain": "math"}
+{"id": "seed_logic_001", "question": "If all roses are flowers and some flowers are red, which of the following must be true? A) All roses are red B) Some roses are red C) Some red things are flowers D) None of the above", "domain": "logic"}
+{"id": "seed_logic_002", "question": "Statement: If it is a bird, then it can fly. Which of the following statements is logically equivalent? A) If it can fly, then it is a bird B) If it is not a bird, then it cannot fly C) If it cannot fly, then it is not a bird", "domain": "logic"}
+{"id": "seed_logic_003", "question": "All students in Class A passed the exam. John is not in Class A. What can we conclude about John?", "domain": "logic"}
+{"id": "seed_logic_004", "question": "Some teachers are scientists. All scientists are researchers. Which conclusion follows? A) All teachers are researchers B) Some teachers are researchers C) All researchers are teachers", "domain": "logic"}
+{"id": "seed_logic_005", "question": "If today is Monday, then tomorrow is Tuesday. Today is not Monday. What can we conclude?", "domain": "logic"}
+{"id": "seed_code_001", "question": "Write a Python function to reverse a string without using slicing or built-in reverse() method.", "domain": "code"}
+{"id": "seed_code_002", "question": "What is the time complexity of binary search on a sorted array of n elements?", "domain": "code"}
+{"id": "seed_code_003", "question": "Explain the difference between shallow copy and deep copy in Python.", "domain": "code"}
+{"id": "seed_code_004", "question": "Write a Python function to check if a given string is a palindrome.", "domain": "code"}
+{"id": "seed_code_005", "question": "What does this Python code do?\ndef fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)", "domain": "code"}
+{"id": "seed_science_001", "question": "Which of the following best explains why objects appear different colors? A) Different objects emit different wavelengths B) Different objects absorb and reflect different wavelengths of light C) Color is an illusion created by the brain", "domain": "science"}
+{"id": "seed_science_002", "question": "What is the function of mitochondria in a eukaryotic cell?", "domain": "science"}
+{"id": "seed_science_003", "question": "Why does ice float on water?", "domain": "science"}
+{"id": "seed_science_004", "question": "What type of chemical reaction occurs when hydrogen and oxygen combine to form water?", "domain": "science"}
+{"id": "seed_science_005", "question": "Which layer of the Earth's atmosphere contains the ozone layer?", "domain": "science"}
+{"id": "seed_common_001", "question": "Why do airplanes fly? Explain using basic physics principles.", "domain": "common_sense"}
+{"id": "seed_common_002", "question": "Why is it important to wear seatbelts in a car?", "domain": "common_sense"}
+{"id": "seed_common_003", "question": "Explain why you should not drink salt water even if you're thirsty.", "domain": "common_sense"}
+{"id": "seed_common_004", "question": "Why do metal objects feel colder than wood objects at the same room temperature?", "domain": "common_sense"}
+{"id": "seed_common_005", "question": "Why do you see a rainbow after it rains?", "domain": "common_sense"}
