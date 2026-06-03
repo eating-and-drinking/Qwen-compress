@@ -1,4 +1,4 @@
-﻿# CoT Generator
+﻿﻿# CoT Generator
 
 Batch generate high-quality Chain-of-Thought (CoT) training data for large model supervised fine-tuning.
 
