@@ -13,18 +13,23 @@ logger = logging.getLogger(__name__)
 
 # HuggingFace 数据集配置
 # key: (hf_dataset_name, subset_or_None, split, question_field, answer_field, domain)
+# 选择标准：优先非选择题形式，适合生成详细推理过程的数据集
 HF_SOURCE_CONFIGS: dict[str, tuple] = {
     "math": (
         "hendrycks/competition_math", None, "train",
         "problem", "solution", "math"
     ),
-    "logiqa": (
-        "lucasmccabe/logiqa", None, "train",
-        "query", "correct_option", "logic"
+    "gsm8k": (
+        "gsm8k", "main", "train",
+        "question", "answer", "math"
     ),
-    "ceval": (
-        "ceval/ceval-exam", "mixed", "val",
-        "question", "answer", "general"
+    "arc": (
+        "allenai/ai2_arc", "ARC-Challenge", "train",
+        "question", "answer", "science"
+    ),
+    "openbookqa": (
+        "openbookqa", "main", "train",
+        "question_stem", "answer", "general"
     ),
     "mbpp": (
         "google-research-datasets/mbpp", "full", "train",
