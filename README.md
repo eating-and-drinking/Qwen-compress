@@ -1,6 +1,6 @@
 # qwen-compress
 
-生产级Qwen大模型压缩工具包，整合三种核心压缩技术：**MOT-FD Group-wise Distillation** + **SparseGPT Pruning** + **QAT/QAD Quantization**。
+玩具级Qwen大模型压缩demo，使用三种核心压缩技术：**MOT-FD Group-wise Distillation** + **SparseGPT Pruning** + **QAT/QAD Quantization**。
 
 ## 🌟 核心特性
 
