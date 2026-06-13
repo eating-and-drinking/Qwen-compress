@@ -28,12 +28,17 @@ distill:
   delta_attn: 0.0
   lambda_ot: 1.0
   lambda_mono: 0.1
+  lambda_ot_backward: 0.0
 
   kd_temperature: 2.0
   ot_temperature: 0.1
   sinkhorn_iters: 50
   freeze_embedding: false
   projector_lr_multiplier: 0.1
+
+  # ---- Enhanced Features ----
+  adaptive_ot_temp: false
+  attn_distill_strategy: kl
 
   data:
     train_path: ./data/cot_sft_120k.jsonl

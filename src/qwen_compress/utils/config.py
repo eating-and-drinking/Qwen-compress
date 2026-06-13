@@ -69,6 +69,12 @@ class DistillConfig(BaseModel):
     - Teacher decomposition: energy_alpha/beta/gamma, min_peak_distance
     - OT alignment: lambda_ot, lambda_mono, ot_temperature, sinkhorn_iters
     - Composite loss: L = α·CE + β·KD + λ_ot·L_OT + λ_mono·L_mono
+    
+    Enhanced features:
+    - Adaptive OT temperature: dynamically adjust based on alignment difficulty
+    - Bidirectional alignment: student→teacher and teacher→student
+    - Attention distillation: match attention patterns
+    - Dynamic functional groups: update group reps during training
     """
     model_config = ConfigDict(extra="forbid")
     teacher_model_name_or_path: str
@@ -86,16 +92,28 @@ class DistillConfig(BaseModel):
     alpha_ce: float = Field(default=1.0, ge=0.0)
     beta_kd: float = Field(default=1.0, ge=0.0)
     gamma_hidden: float = Field(default=0.0, ge=0.0)   # legacy, 0 disables
-    delta_attn: float = Field(default=0.0, ge=0.0)      # legacy, 0 disables
+    delta_attn: float = Field(default=0.0, ge=0.0)      # attention distillation
 
     # ---- OT-specific weights ----
     lambda_ot: float = Field(default=1.0, ge=0.0)
     lambda_mono: float = Field(default=0.1, ge=0.0)
+    lambda_ot_backward: float = Field(default=0.5, ge=0.0)  # bidirectional alignment
 
     # ---- Temperature / hyperparams ----
     kd_temperature: float = Field(default=2.0, gt=0.0)
     ot_temperature: float = Field(default=0.1, gt=0.0)
     sinkhorn_iters: int = Field(default=50, ge=1)
+
+    # ---- Adaptive OT temperature ----
+    adaptive_ot_temp: bool = Field(default=False)
+    adaptive_temp_min: float = Field(default=0.05, gt=0.0)
+    adaptive_temp_max: float = Field(default=0.5, gt=0.0)
+    adaptive_temp_scale: float = Field(default=1.0, ge=0.0)
+
+    # ---- Dynamic functional groups ----
+    dynamic_groups: bool = Field(default=False)
+    dynamic_groups_update_interval: int = Field(default=500, ge=1)
+    dynamic_groups_momentum: float = Field(default=0.99, ge=0.0, le=1.0)
 
     # ---- Training ----
     freeze_embedding: bool = False

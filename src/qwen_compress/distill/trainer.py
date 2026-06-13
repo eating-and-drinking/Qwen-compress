@@ -76,6 +76,35 @@ class _LayerOutputCapture:
         self.last_output = None
 
 
+class _AttentionCapture:
+    """Forward hook that captures attention weights from a decoder layer."""
+
+    def __init__(self) -> None:
+        self.last_attention: Optional[torch.Tensor] = None
+        self._handle: Optional[torch.utils.hooks.RemovableHandle] = None
+
+    def attach(self, layer: nn.Module) -> None:
+        if self._handle is not None:
+            raise RuntimeError("Hook already attached.")
+
+        def _hook(_mod, _inp, out):  # noqa: ANN001
+            if isinstance(out, tuple):
+                if len(out) > 1 and isinstance(out[1], dict) and 'attentions' in out[1]:
+                    self.last_attention = out[1]['attentions']
+                elif hasattr(out[0], 'attentions'):
+                    self.last_attention = out[0].attentions
+            elif hasattr(out, 'attentions'):
+                self.last_attention = out.attentions
+
+        self._handle = layer.register_forward_hook(_hook)
+
+    def detach(self) -> None:
+        if self._handle is not None:
+            self._handle.remove()
+            self._handle = None
+        self.last_attention = None
+
+
 # ============================================================================
 # LR Scheduler
 # ============================================================================
@@ -170,7 +199,7 @@ class GroupwiseDistillTrainer:
             min_peak_distance=config.min_peak_distance,
         )
 
-        # ---- Loss (MOT-FD mode) ------------------------------------------
+        # ---- Loss (MOT-FD mode with enhanced features) -------------------
         self.loss_fn = DistillationLoss(
             student_hidden_size=s_info.hidden_size,
             teacher_hidden_size=t_info.hidden_size,
@@ -181,14 +210,23 @@ class GroupwiseDistillTrainer:
             delta_attn=config.delta_attn,
             lambda_ot=config.lambda_ot,
             lambda_mono=config.lambda_mono,
+            lambda_ot_backward=getattr(config, 'lambda_ot_backward', 0.0),
             kd_temperature=config.kd_temperature,
             ot_temperature=config.ot_temperature,
             sinkhorn_iters=config.sinkhorn_iters,
+            adaptive_ot_temp=getattr(config, 'adaptive_ot_temp', False),
+            adaptive_temp_min=getattr(config, 'adaptive_temp_min', 0.05),
+            adaptive_temp_max=getattr(config, 'adaptive_temp_max', 0.5),
+            adaptive_temp_scale=getattr(config, 'adaptive_temp_scale', 1.0),
+            attn_distill_strategy=getattr(config, 'attn_distill_strategy', 'kl'),
+            attn_ot_temperature=getattr(config, 'attn_ot_temperature', 0.1),
+            attn_sinkhorn_iters=getattr(config, 'attn_sinkhorn_iters', 50),
         )
         self.loss_fn.to(next(self.student.parameters()).device)
 
-        # ---- Hooks: capture ALL student hidden states --------------------
+        # ---- Hooks: capture student hidden states and attention ----------
         self._student_captures: List[_LayerOutputCapture] = []
+        self._student_attn_captures: List[_AttentionCapture] = []
         self._attach_student_hooks()
 
         # ---- Data --------------------------------------------------------
@@ -383,18 +421,85 @@ class GroupwiseDistillTrainer:
     # ======================================================================
 
     def _attach_student_hooks(self) -> None:
-        """Register hooks on ALL student decoder layers to capture hidden states."""
+        """Register hooks on ALL student decoder layers to capture hidden states and attentions."""
         s_layers = get_decoder_layers(self.student)
         for layer in s_layers:
             cap = _LayerOutputCapture()
             cap.attach(layer)
             self._student_captures.append(cap)
-        _logger.info(f"Attached hooks to {len(self._student_captures)} student layers.")
+            if self.config.delta_attn > 0:
+                attn_cap = _AttentionCapture()
+                attn_cap.attach(layer)
+                self._student_attn_captures.append(attn_cap)
+        _logger.info(f"Attached hooks to {len(self._student_captures)} student layers "
+                   f"({len(self._student_attn_captures)} attention hooks.")
 
     def _detach_hooks(self) -> None:
         for cap in self._student_captures:
             cap.detach()
         self._student_captures.clear()
+        for cap in getattr(self, '_student_attn_captures', []):
+            cap.detach()
+        self._student_attn_captures.clear()
+
+    # ======================================================================
+    # Dynamic groups helpers
+    # ======================================================================
+
+    def _extract_teacher_layer_reps(
+        self, batch: Dict[str, torch.Tensor]
+    ) -> Optional[torch.Tensor]:
+        """Extract teacher layer representations for a single batch.
+
+        Used to accumulate representations for dynamic group update.
+        """
+        device = next(self.student.parameters()).device
+        input_ids = batch["input_ids"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
+
+        t_layers = get_decoder_layers(self.teacher)
+        teacher_captures: List[_LayerOutputCapture] = []
+        for layer in t_layers:
+            cap = _LayerOutputCapture()
+            cap.attach(layer)
+            teacher_captures.append(cap)
+
+        try:
+            with torch.no_grad():
+                self.teacher(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    use_cache=False,
+                )
+
+            reps = []
+            for cap in teacher_captures:
+                if cap.last_output is not None:
+                    rep = cap.last_output.mean(dim=(0, 1))
+                    reps.append(rep.to(device))
+                else:
+                    return None
+        finally:
+            for cap in teacher_captures:
+                cap.detach()
+
+        if reps:
+            return torch.stack(reps, dim=0)
+        return None
+
+    def _recompute_group_reps(
+        self, layer_reps: torch.Tensor
+    ) -> torch.Tensor:
+        """Recompute group representations using cached group assignment.
+
+        Uses the same group boundaries as the initial decomposition.
+        """
+        groups = self.assignment.groups
+        group_reps = []
+        for g in groups:
+            g_reps = layer_reps[g]
+            group_reps.append(g_reps.mean(dim=0))
+        return torch.stack(group_reps, dim=0)
 
     # ======================================================================
     # Auto-cast context
@@ -414,27 +519,31 @@ class GroupwiseDistillTrainer:
 
     def _forward_pair(
         self, batch: Dict[str, torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]:
-        """Run forward pass and return (student_logits, teacher_logits, student_hidden).
+    ) -> tuple[torch.Tensor, torch.Tensor, List[torch.Tensor], Optional[List[torch.Tensor]], Optional[List[torch.Tensor]]]:
+        """Run forward pass and return (student_logits, teacher_logits, student_hidden, student_attn, teacher_attn).
 
         In MOT-FD mode, only student hidden states are captured for OT alignment.
         Teacher is only run for logits (KD loss).
+        When delta_attn > 0, also captures attention weights for distillation.
         """
         device = next(self.student.parameters()).device
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
+        output_attn = self.config.delta_attn > 0
 
         with torch.no_grad():
             teacher_out = self.teacher(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 use_cache=False,
+                output_attentions=output_attn,
             )
 
         student_out = self.student(
             input_ids=input_ids,
             attention_mask=attention_mask,
             use_cache=False,
+            output_attentions=output_attn,
         )
 
         student_hidden = [c.last_output for c in self._student_captures]
@@ -444,10 +553,21 @@ class GroupwiseDistillTrainer:
                 "A student hook did not capture output — verify layer indices."
             )
 
+        # Collect attentions if configured
+        student_attns = None
+        teacher_attns = None
+        if output_attn:
+            if hasattr(student_out, 'attentions') and student_out.attentions is not None:
+                student_attns = list(student_out.attentions)
+            if hasattr(teacher_out, 'attentions') and teacher_out.attentions is not None:
+                teacher_attns = list(teacher_out.attentions)
+
         return (
             student_out.logits,
             teacher_out.logits.to(device),
             student_hidden,
+            student_attns,
+            teacher_attns,
         )
 
     # ======================================================================
@@ -476,7 +596,7 @@ class GroupwiseDistillTrainer:
         with torch.no_grad():
             for batch in self.eval_loader:
                 with self._autocast():
-                    s_logits, t_logits, s_hidden = self._forward_pair(batch)
+                    s_logits, t_logits, s_hidden, s_attns, t_attns = self._forward_pair(batch)
                     labels = batch["labels"].to(device)
                     attention_mask = batch["attention_mask"].to(device)
 
@@ -487,6 +607,8 @@ class GroupwiseDistillTrainer:
                         attention_mask=attention_mask,
                         student_hidden_states=s_hidden,
                         teacher_hidden_states=None,
+                        student_attentions=s_attns,
+                        teacher_attentions=t_attns,
                     )
 
                     for k, v in loss_out.to_log_dict().items():
@@ -535,13 +657,21 @@ class GroupwiseDistillTrainer:
         best_val_loss: Optional[float] = None
         best_step: int = 0
 
+        dynamic_groups_enabled = getattr(cfg, 'dynamic_groups', False)
+        dynamic_update_interval = getattr(cfg, 'dynamic_groups_update_interval', 500)
+        dynamic_momentum = getattr(cfg, 'dynamic_groups_momentum', 0.99)
+
+        # Track running teacher layer reps for dynamic groups
+        running_teacher_layer_reps = None
+        running_teacher_count = 0
+
         while global_step < self.total_steps:
             for batch in self.train_loader:
                 if global_step >= self.total_steps:
                     break
 
                 with self._autocast():
-                    s_logits, t_logits, s_hidden = self._forward_pair(batch)
+                    s_logits, t_logits, s_hidden, s_attns, t_attns = self._forward_pair(batch)
                     labels = batch["labels"].to(s_logits.device)
                     attention_mask = batch["attention_mask"].to(s_logits.device)
                     loss_out = self.loss_fn(
@@ -551,8 +681,22 @@ class GroupwiseDistillTrainer:
                         attention_mask=attention_mask,
                         student_hidden_states=s_hidden,
                         teacher_hidden_states=None,  # MOT-FD uses group reps
+                        student_attentions=s_attns,
+                        teacher_attentions=t_attns,
                     )
                     loss = loss_out.total / cfg.data.gradient_accumulation_steps
+
+                # Accumulate teacher layer reps for dynamic groups
+                if dynamic_groups_enabled:
+                    device = s_logits.device
+                    batch_teacher_reps = self._extract_teacher_layer_reps(batch)
+                    if batch_teacher_reps is not None:
+                        batch_teacher_reps = batch_teacher_reps.to(device)
+                        if running_teacher_layer_reps is None:
+                            running_teacher_layer_reps = batch_teacher_reps
+                        else:
+                            running_teacher_layer_reps = running_teacher_layer_reps + batch_teacher_reps
+                        running_teacher_count += 1
 
                 if self._scaler is not None:
                     self._scaler.scale(loss).backward()
@@ -580,6 +724,28 @@ class GroupwiseDistillTrainer:
                     self.optimizer.zero_grad(set_to_none=True)
                     accumulated = 0
                     global_step += 1
+
+                    # Dynamic groups: update teacher group reps periodically
+                    if (dynamic_groups_enabled
+                        and global_step % dynamic_update_interval == 0
+                        and running_teacher_layer_reps is not None
+                        and running_teacher_count > 0):
+                        avg_teacher_reps = running_teacher_layer_reps / running_teacher_count
+                        # Re-compute group representations based on new layer reps
+                        new_group_reps = self._recompute_group_reps(
+                            avg_teacher_reps.to(self.assignment.group_representations.device)
+                        )
+                        self.loss_fn.update_teacher_group_reps(
+                            new_group_reps,
+                            momentum=dynamic_momentum,
+                        )
+                        # Reset running accumulators
+                        running_teacher_layer_reps = None
+                        running_teacher_count = 0
+                        _logger.info(
+                            f"[step={global_step}] Updated teacher group representations "
+                            f"via dynamic groups (momentum={dynamic_momentum})"
+                        )
 
                     if global_step % cfg.training.logging_steps == 0 and is_main_process():
                         avg = {

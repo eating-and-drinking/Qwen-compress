@@ -126,8 +126,13 @@ qwen-compress/
 | `calibration_samples` | 256 | 教师分解校准样本数 |
 | `alpha_ce` | 1.0 | 交叉熵损失权重 |
 | `beta_kd` | 1.0 | 知识蒸馏损失权重 |
-| `lambda_ot` | 1.0 | 最优传输损失权重 |
+| `lambda_ot` | 1.0 | 最优传输损失权重（学生→教师） |
 | `lambda_mono` | 0.1 | 单调性约束损失权重 |
+| `lambda_ot_backward` | 0.5 | 反向最优传输损失权重（教师→学生） |
+| `delta_attn` | 0.0 | 注意力蒸馏损失权重 |
+| `adaptive_ot_temp` | false | 是否启用自适应OT温度 |
+| `attn_distill_strategy` | kl | 注意力蒸馏策略 (kl/cosine/mse/ot) |
+| `dynamic_groups` | false | 是否启用动态功能组更新 |
 
 ### 剪枝配置 (`configs/prune/*.yaml`)
 

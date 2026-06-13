@@ -24,18 +24,35 @@ energy_gamma: 0.3                 # γ: cosine-distance weight
 min_peak_distance: 2              # minimum gap between breakpoints
 
 # ---- MOT-FD Composite Loss Weights ----
-# L = α·L_CE + β·L_KD + λ_ot·L_OT + λ_mono·L_mono
+# L = α·L_CE + β·L_KD + λ_ot·L_OT + λ_backward·L_OT_backward + λ_mono·L_mono + δ·L_attn
 alpha_ce: 1.0                     # CE weight
 beta_kd: 1.0                      # KD (KL divergence) weight
 gamma_hidden: 0.0                 # legacy hidden cosine (0 = disabled)
-delta_attn: 0.0                   # legacy attention KL (0 = disabled)
-lambda_ot: 1.0                    # OT alignment weight
+delta_attn: 0.0                   # attention distillation weight (0 = disabled)
+lambda_ot: 1.0                    # OT alignment weight (student→teacher)
 lambda_mono: 0.1                  # monotonic regularization weight
+lambda_ot_backward: 0.0           # backward OT weight (teacher→student), 0 = disabled
 
 # ---- Temperature / Hyperparameters ----
 kd_temperature: 2.0               # KD softmax temperature
 ot_temperature: 0.1               # Sinkhorn entropy regularization ε
 sinkhorn_iters: 50                # Sinkhorn iterations
+
+# ---- Enhanced Features ----
+adaptive_ot_temp: false           # enable adaptive OT temperature
+adaptive_temp_min: 0.05           # minimum adaptive temperature
+adaptive_temp_max: 0.5            # maximum adaptive temperature
+adaptive_temp_scale: 1.0          # scaling factor for adaptive temperature
+
+# ---- Attention Distillation ----
+attn_distill_strategy: kl         # kl, cosine, mse, ot
+attn_ot_temperature: 0.1          # OT temperature for attention distillation
+attn_sinkhorn_iters: 50           # Sinkhorn iterations for attention OT
+
+# ---- Dynamic Functional Groups ----
+dynamic_groups: false             # enable dynamic group updates
+dynamic_groups_update_interval: 500  # update interval in steps
+dynamic_groups_momentum: 0.99     # momentum for smooth updates
 
 freeze_embedding: false
 projector_lr_multiplier: 0.1      # projector LR = base LR × this value

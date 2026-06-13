@@ -216,7 +216,17 @@ class QADTrainer:
                 beta_kd=config.beta_kd,
                 gamma_hidden=config.gamma_hidden,
                 delta_attn=0.0,
+                lambda_ot=0.0,
+                lambda_mono=0.0,
+                lambda_ot_backward=0.0,
                 kd_temperature=config.kd_temperature,
+                ot_temperature=0.1,
+                sinkhorn_iters=50,
+                adaptive_ot_temp=False,
+                adaptive_temp_min=0.05,
+                adaptive_temp_max=0.5,
+                adaptive_temp_scale=1.0,
+                attn_distill_strategy="kl",
             )
             self.loss_fn.to(device)
 

@@ -12,6 +12,7 @@ from qwen_compress.distill.losses import (
     HiddenCosineLoss,
     KDLoss,
     OptimalTransportAlignLoss,
+    AttentionDistillationLoss,
     sinkhorn,
 )
 
@@ -113,13 +114,51 @@ class TestOTAlignLoss:
         t_groups = torch.randn(4, 8)  # 4 teacher groups
         valid_mask = torch.ones(2, 6, dtype=torch.bool)
 
-        ot_loss, mono_loss, gamma, expected_pos = loss_fn(
+        ot_loss, ot_backward_loss, mono_loss, gamma, expected_pos = loss_fn(
             s_hidden, t_groups, valid_mask,
         )
         assert ot_loss.item() > 0
+        assert ot_backward_loss.item() == 0.0  # bidirectional disabled
         assert mono_loss.item() >= 0
         assert gamma.shape == (8, 4)
         assert expected_pos.shape == (8,)
+
+    def test_bidirectional(self):
+        """Test bidirectional OT alignment."""
+        loss_fn = OptimalTransportAlignLoss(
+            ot_temperature=0.1,
+            sinkhorn_iters=20,
+            bidirectional=True,
+        )
+        s_hidden = [torch.randn(2, 6, 8) for _ in range(8)]
+        t_groups = torch.randn(4, 8)
+        valid_mask = torch.ones(2, 6, dtype=torch.bool)
+
+        ot_loss, ot_backward_loss, mono_loss, gamma, expected_pos = loss_fn(
+            s_hidden, t_groups, valid_mask,
+        )
+        assert ot_loss.item() > 0
+        assert ot_backward_loss.item() > 0  # bidirectional enabled
+        assert mono_loss.item() >= 0
+
+    def test_adaptive_temperature(self):
+        """Test adaptive OT temperature."""
+        loss_fn = OptimalTransportAlignLoss(
+            ot_temperature=0.1,
+            sinkhorn_iters=20,
+            adaptive_temperature=True,
+            adaptive_temp_min=0.05,
+            adaptive_temp_max=0.5,
+        )
+        s_hidden = [torch.randn(2, 6, 8) for _ in range(8)]
+        t_groups = torch.randn(4, 8) * 10.0  # Make alignment harder
+        valid_mask = torch.ones(2, 6, dtype=torch.bool)
+
+        ot_loss, ot_backward_loss, mono_loss, gamma, expected_pos = loss_fn(
+            s_hidden, t_groups, valid_mask,
+        )
+        assert ot_loss.item() > 0
+        assert torch.isfinite(ot_loss)
 
     def test_mono_zero_when_monotonic(self):
         """When student reps are naturally ordered to match groups, mono loss ~ 0."""
@@ -137,9 +176,57 @@ class TestOTAlignLoss:
             s_hidden.append(h)
         valid_mask = torch.ones(2, 6, dtype=torch.bool)
 
-        _, mono_loss, _, _ = loss_fn(s_hidden, group_centers, valid_mask)
+        _, _, mono_loss, _, _ = loss_fn(s_hidden, group_centers, valid_mask)
         # Expected positions should be roughly increasing
         assert mono_loss.item() < 0.5  # low penalty
+
+
+# ============================================================================
+# Attention Distillation Loss
+# ============================================================================
+
+
+class TestAttentionDistillationLoss:
+    def test_kl_strategy(self):
+        loss_fn = AttentionDistillationLoss(strategy="kl")
+        s_attn = [torch.softmax(torch.randn(2, 4, 6, 6), dim=-1)]
+        t_attn = [torch.softmax(torch.randn(2, 4, 6, 6), dim=-1)]
+        loss = loss_fn(s_attn, t_attn)
+        assert loss.item() >= 0
+        assert torch.isfinite(loss)
+
+    def test_cosine_strategy(self):
+        loss_fn = AttentionDistillationLoss(strategy="cosine")
+        s_attn = [torch.randn(2, 4, 6, 6)]
+        t_attn = [torch.randn(2, 4, 6, 6)]
+        loss = loss_fn(s_attn, t_attn)
+        assert loss.item() >= 0
+        assert torch.isfinite(loss)
+
+    def test_mse_strategy(self):
+        loss_fn = AttentionDistillationLoss(strategy="mse")
+        s_attn = [torch.randn(2, 4, 6, 6)]
+        t_attn = [torch.randn(2, 4, 6, 6)]
+        loss = loss_fn(s_attn, t_attn)
+        assert loss.item() >= 0
+        assert torch.isfinite(loss)
+
+    def test_ot_strategy(self):
+        """Test OT-based attention distillation."""
+        loss_fn = AttentionDistillationLoss(strategy="ot", ot_temperature=0.1)
+        s_attn = [torch.softmax(torch.randn(2, 4, 6, 6), dim=-1)]  # 4 student heads
+        t_attn = [torch.softmax(torch.randn(2, 8, 6, 6), dim=-1)]  # 8 teacher heads
+        loss = loss_fn(s_attn, t_attn)
+        assert loss.item() >= 0
+        assert torch.isfinite(loss)
+
+    def test_head_mismatch(self):
+        """Test handling of different number of heads."""
+        loss_fn = AttentionDistillationLoss(strategy="kl")
+        s_attn = [torch.softmax(torch.randn(2, 4, 6, 6), dim=-1)]  # 4 heads
+        t_attn = [torch.softmax(torch.randn(2, 8, 6, 6), dim=-1)]  # 8 heads
+        loss = loss_fn(s_attn, t_attn)
+        assert torch.isfinite(loss)
 
 
 # ============================================================================
