@@ -114,32 +114,13 @@ class TestOTAlignLoss:
         t_groups = torch.randn(4, 8)  # 4 teacher groups
         valid_mask = torch.ones(2, 6, dtype=torch.bool)
 
-        ot_loss, ot_backward_loss, mono_loss, gamma, expected_pos = loss_fn(
+        ot_loss, mono_loss, gamma, expected_pos = loss_fn(
             s_hidden, t_groups, valid_mask,
         )
         assert ot_loss.item() > 0
-        assert ot_backward_loss.item() == 0.0  # bidirectional disabled
         assert mono_loss.item() >= 0
         assert gamma.shape == (8, 4)
         assert expected_pos.shape == (8,)
-
-    def test_bidirectional(self):
-        """Test bidirectional OT alignment."""
-        loss_fn = OptimalTransportAlignLoss(
-            ot_temperature=0.1,
-            sinkhorn_iters=20,
-            bidirectional=True,
-        )
-        s_hidden = [torch.randn(2, 6, 8) for _ in range(8)]
-        t_groups = torch.randn(4, 8)
-        valid_mask = torch.ones(2, 6, dtype=torch.bool)
-
-        ot_loss, ot_backward_loss, mono_loss, gamma, expected_pos = loss_fn(
-            s_hidden, t_groups, valid_mask,
-        )
-        assert ot_loss.item() > 0
-        assert ot_backward_loss.item() > 0  # bidirectional enabled
-        assert mono_loss.item() >= 0
 
     def test_adaptive_temperature(self):
         """Test adaptive OT temperature."""
@@ -154,7 +135,7 @@ class TestOTAlignLoss:
         t_groups = torch.randn(4, 8) * 10.0  # Make alignment harder
         valid_mask = torch.ones(2, 6, dtype=torch.bool)
 
-        ot_loss, ot_backward_loss, mono_loss, gamma, expected_pos = loss_fn(
+        ot_loss, mono_loss, gamma, expected_pos = loss_fn(
             s_hidden, t_groups, valid_mask,
         )
         assert ot_loss.item() > 0
@@ -176,7 +157,7 @@ class TestOTAlignLoss:
             s_hidden.append(h)
         valid_mask = torch.ones(2, 6, dtype=torch.bool)
 
-        _, _, mono_loss, _, _ = loss_fn(s_hidden, group_centers, valid_mask)
+        _, mono_loss, _, _ = loss_fn(s_hidden, group_centers, valid_mask)
         # Expected positions should be roughly increasing
         assert mono_loss.item() < 0.5  # low penalty
 
@@ -267,6 +248,37 @@ class TestDistillationLossMOTFD:
         assert "ot" in out.breakdown
         assert "mono" in out.breakdown
         assert "total" in out.breakdown
+        assert torch.isfinite(out.total)
+        out.total.backward()
+
+    def test_mot_fd_dim_mismatch(self):
+        """MOT-FD with teacher_hidden_size != student_hidden_size uses ot_projector."""
+        teacher_group_reps = torch.randn(8, 32)  # teacher D=32
+        loss_fn = DistillationLoss(
+            student_hidden_size=16,
+            teacher_hidden_size=32,
+            teacher_group_reps=teacher_group_reps,
+            alpha_ce=1.0,
+            beta_kd=1.0,
+            lambda_ot=1.0,
+            lambda_mono=0.1,
+            ot_temperature=0.1,
+            sinkhorn_iters=20,
+        )
+        assert isinstance(loss_fn.ot_projector, torch.nn.Linear)
+        s_logits = torch.randn(2, 6, 100, requires_grad=True)
+        t_logits = torch.randn(2, 6, 100)
+        labels = torch.randint(0, 100, (2, 6))
+        labels[:, :2] = -100
+        s_hidden = [torch.randn(2, 6, 16) for _ in range(6)]  # student D=16
+
+        out = loss_fn(
+            student_logits=s_logits,
+            teacher_logits=t_logits,
+            labels=labels,
+            student_hidden_states=s_hidden,
+            teacher_hidden_states=None,
+        )
         assert torch.isfinite(out.total)
         out.total.backward()
 

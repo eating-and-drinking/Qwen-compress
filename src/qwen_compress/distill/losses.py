@@ -53,9 +53,12 @@ def sinkhorn(
     a: Optional[torch.Tensor] = None,
     b: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Entropy-regularized Optimal Transport via Sinkhorn algorithm.
+    """Entropy-regularized Optimal Transport via log-domain Sinkhorn algorithm.
 
     γ* = argmin_{γ∈Π(a,b)} Σ_{l,k} γ_{l,k} C_{l,k} + ε Σ γ_{l,k} log γ_{l,k}
+
+    Log-domain formulation avoids exp(-C/ε) underflow when C is large
+    (e.g. squared distances in high-dimensional spaces for 14B→3B distillation).
 
     Parameters
     ----------
@@ -82,17 +85,19 @@ def sinkhorn(
     if b is None:
         b = torch.ones(M, device=device, dtype=dtype) / M
 
-    # Gibbs kernel: K = exp(-C / ε)
-    K = torch.exp(-C / eps)
+    log_a = a.log()
+    log_b = b.log()
+    log_K = -C / eps  # [N, M]
 
-    # Sinkhorn iterations
-    v = torch.ones(M, device=device, dtype=dtype) / M
+    # Log-domain Sinkhorn: u_i = a_i / (K v)_i,  v_j = b_j / (K^T u)_j
+    log_u = torch.zeros(N, device=device, dtype=dtype)
     for _ in range(num_iters):
-        u = a / (K @ v + 1e-12)
-        v = b / (K.T @ u + 1e-12)
+        # log v_j = log b_j - logsumexp_i(log K_ij + log u_i)
+        log_v = log_b - torch.logsumexp(log_K + log_u.unsqueeze(1), dim=0)  # [M]
+        # log u_i = log a_i - logsumexp_j(log K_ij + log v_j)
+        log_u = log_a - torch.logsumexp(log_K + log_v.unsqueeze(0), dim=1)  # [N]
 
-    # Transport plan
-    gamma = u.unsqueeze(1) * K * v.unsqueeze(0)
+    gamma = (log_u.unsqueeze(1) + log_K + log_v.unsqueeze(0)).exp()
     return gamma
 
 
@@ -126,8 +131,10 @@ class KDLoss(nn.Module):
         valid_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         T = self.temperature
-        s_log_probs = F.log_softmax(student_logits / T, dim=-1)
-        t_probs = F.softmax(teacher_logits.detach() / T, dim=-1)
+        # Align vocab size: teacher and student may differ (e.g. 152064 vs 151936).
+        min_vocab = min(student_logits.size(-1), teacher_logits.size(-1))
+        s_log_probs = F.log_softmax(student_logits[..., :min_vocab] / T, dim=-1)
+        t_probs = F.softmax(teacher_logits.detach()[..., :min_vocab] / T, dim=-1)
 
         per_token = F.kl_div(s_log_probs, t_probs, reduction="none").sum(dim=-1)
         return masked_mean(per_token, valid_mask) * (T * T)
@@ -408,43 +415,36 @@ class OptimalTransportAlignLoss(nn.Module):
         self,
         ot_temperature: float = 0.1,
         sinkhorn_iters: int = 50,
-        soft_assign_temperature: float = 1.0,
         adaptive_temperature: bool = False,
         adaptive_temp_min: float = 0.05,
         adaptive_temp_max: float = 0.5,
         adaptive_temp_scale: float = 1.0,
-        bidirectional: bool = False,
     ):
         super().__init__()
         if ot_temperature <= 0:
             raise ValueError("ot_temperature must be > 0")
         self.base_temperature = ot_temperature
         self.sinkhorn_iters = sinkhorn_iters
-        self.soft_assign_temperature = soft_assign_temperature
         self.adaptive_temperature = adaptive_temperature
         self.adaptive_temp_min = adaptive_temp_min
         self.adaptive_temp_max = adaptive_temp_max
         self.adaptive_temp_scale = adaptive_temp_scale
-        self.bidirectional = bidirectional
 
     def _compute_adaptive_temperature(self, cost_matrix: torch.Tensor) -> float:
         """Compute adaptive temperature based on alignment difficulty.
-        
-        Higher cost (harder alignment) → higher temperature (softer assignment)
-        Lower cost (easier alignment) → lower temperature (harder assignment)
+
+        Higher cost (harder alignment) → higher temperature (softer assignment).
         """
-        mean_cost = cost_matrix.mean().item()
-        adaptive_temp = self.base_temperature * (1 + self.adaptive_temp_scale * mean_cost)
-        return float(torch.clamp(torch.tensor(adaptive_temp), 
-                                min=self.adaptive_temp_min, 
-                                max=self.adaptive_temp_max))
+        mean_cost = cost_matrix.detach().mean().item()
+        t = self.base_temperature * (1.0 + self.adaptive_temp_scale * mean_cost)
+        return max(self.adaptive_temp_min, min(self.adaptive_temp_max, t))
 
     def forward(
         self,
         student_hidden_states: Sequence[torch.Tensor],
         teacher_group_reps: torch.Tensor,
         valid_mask: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Parameters
         ----------
@@ -457,12 +457,11 @@ class OptimalTransportAlignLoss(nn.Module):
 
         Returns
         -------
-        ot_loss, ot_backward_loss, mono_loss, transport_plan, expected_positions:
-            - ot_loss: scalar, forward OT loss (student→teacher).
-            - ot_backward_loss: scalar, backward OT loss (teacher→student).
+        ot_loss, mono_loss, transport_plan, expected_positions:
+            - ot_loss: scalar, OT loss (student→teacher).
             - mono_loss: scalar, monotonic penalty.
-            - transport_plan: ``[L, G]`` tensor.
-            - expected_positions: ``[L]`` tensor (μ_l).
+            - transport_plan: ``[L, G]`` tensor (detached).
+            - expected_positions: ``[L]`` tensor (μ_l, detached).
         """
         num_layers = len(student_hidden_states)
         num_groups = teacher_group_reps.shape[0]
@@ -481,21 +480,9 @@ class OptimalTransportAlignLoss(nn.Module):
             student_reps.append(rep)
         s_reps = torch.stack(student_reps, dim=0)  # [L, D]
 
-        # Align teacher group reps to student device/dtype
+        # Align teacher group reps to student device/dtype.
+        # Dimension matching is the caller's responsibility (DistillationLoss.ot_projector).
         t_reps = teacher_group_reps.to(device=device, dtype=dtype)  # [G, D]
-
-        # Handle dimension mismatch (teacher vs student hidden sizes)
-        if s_reps.shape[-1] != t_reps.shape[-1]:
-            t_dim = t_reps.shape[-1]
-            s_dim = s_reps.shape[-1]
-            _logger.warning(
-                f"Hidden dimension mismatch in OT cost: student={s_dim}, "
-                f"teacher_group={t_dim}. Using dimension truncation; consider "
-                f"using a learned projector for better alignment."
-            )
-            min_dim = min(s_dim, t_dim)
-            s_reps = s_reps[..., :min_dim]
-            t_reps = t_reps[..., :min_dim]
 
         # 2. Cost matrix: C_{l,k} = ||s_l - g_k||^2 / D
         # [L, D] vs [G, D] → [L, G]
@@ -510,40 +497,30 @@ class OptimalTransportAlignLoss(nn.Module):
         else:
             ot_temp = self.base_temperature
 
-        # 4. Forward transport plan (student→teacher) via Sinkhorn
+        # 4. Transport plan (student→teacher) via log-domain Sinkhorn
         gamma_st = sinkhorn(
             C,
             eps=ot_temp,
             num_iters=self.sinkhorn_iters,
         )  # [L, G]
 
-        # 5. Forward OT loss
-        ot_loss = (gamma_st * C).sum()
+        # 5. OT loss.
+        # By Danskin's theorem (envelope theorem), the gradient of the Sinkhorn
+        # objective w.r.t. C is exactly γ* — so detach γ and differentiate only
+        # through C to get the correct OT gradient.
+        ot_loss = (gamma_st.detach() * C).sum()
 
-        # 6. Backward OT loss (teacher→student)
-        ot_backward_loss = torch.tensor(0.0, device=device, dtype=dtype)
-        if self.bidirectional:
-            # Cost matrix for backward alignment: C_{k,l} = ||g_k - s_l||^2 / D
-            # This is just C^T
-            C_ts = C.T  # [G, L]
-            gamma_ts = sinkhorn(
-                C_ts,
-                eps=ot_temp,
-                num_iters=self.sinkhorn_iters,
-            )  # [G, L]
-            ot_backward_loss = (gamma_ts * C_ts).sum()
-
-        # 7. Soft assignment and expected functional position
-        # π_{l,k} = softmax(-C_{l,k} / τ)
-        pi = F.softmax(-C / self.soft_assign_temperature, dim=-1)  # [L, G]
+        # 6. Expected functional position derived from the OT plan.
+        # Normalise each row of γ_st so they sum to 1.
+        pi = gamma_st / gamma_st.sum(dim=-1, keepdim=True).clamp_min(1e-12)  # [L, G]
         group_indices = torch.arange(num_groups, device=device, dtype=dtype)  # [G]
         expected_pos = (pi * group_indices.unsqueeze(0)).sum(dim=-1)  # [L]
 
-        # 8. Monotonic regularization
+        # 7. Monotonic regularization: penalise violations of μ_l < μ_{l+1}
         mono_penalty = F.relu(expected_pos[:-1] - expected_pos[1:])
         mono_loss = mono_penalty.sum()
 
-        return ot_loss, ot_backward_loss, mono_loss, gamma_st.detach(), expected_pos.detach()
+        return ot_loss, mono_loss, gamma_st.detach(), expected_pos.detach()
 
 
 # ============================================================================
@@ -555,7 +532,7 @@ class DistillationLoss(nn.Module):
     """Composite distillation loss supporting MOT-FD and legacy QAT modes.
 
     Enhanced MOT-FD mode (teacher_group_reps is provided):
-        L = α·CE + β·KD + λ_ot·L_OT + λ_backward·L_OT_backward + λ_mono·L_mono + δ·L_attn
+        L = α·CE + β·KD + λ_ot·L_OT + λ_mono·L_mono + δ·L_attn
 
     Legacy QAT mode (teacher_group_reps is None):
         L = α·CE + β·KD + γ·hidden_cosine
@@ -574,7 +551,6 @@ class DistillationLoss(nn.Module):
         # MOT-FD specific
         lambda_ot: float = 1.0,
         lambda_mono: float = 0.1,
-        lambda_ot_backward: float = 0.5,
         # Temperature / hyperparams
         kd_temperature: float = 2.0,
         ot_temperature: float = 0.1,
@@ -596,7 +572,6 @@ class DistillationLoss(nn.Module):
         self.delta_attn = delta_attn
         self.lambda_ot = lambda_ot
         self.lambda_mono = lambda_mono
-        self.lambda_ot_backward = lambda_ot_backward
 
         # KD loss (always used)
         self.kd = KDLoss(temperature=kd_temperature)
@@ -618,8 +593,15 @@ class DistillationLoss(nn.Module):
 
         # OT alignment (used in MOT-FD mode when teacher_group_reps is provided)
         self.ot_loss_fn: Optional[OptimalTransportAlignLoss] = None
+        # Default identity; overridden below when hidden sizes differ.
+        self.ot_projector: nn.Module = nn.Identity()
         if teacher_group_reps is not None:
             self.register_buffer("teacher_group_reps", teacher_group_reps)
+            # Map teacher group representations into student hidden space before OT.
+            # Orthogonal init preserves pairwise distances at the start of training.
+            if teacher_hidden_size != student_hidden_size:
+                self.ot_projector = nn.Linear(teacher_hidden_size, student_hidden_size, bias=False)
+                nn.init.orthogonal_(self.ot_projector.weight)
             self.ot_loss_fn = OptimalTransportAlignLoss(
                 ot_temperature=ot_temperature,
                 sinkhorn_iters=sinkhorn_iters,
@@ -627,7 +609,6 @@ class DistillationLoss(nn.Module):
                 adaptive_temp_min=adaptive_temp_min,
                 adaptive_temp_max=adaptive_temp_max,
                 adaptive_temp_scale=adaptive_temp_scale,
-                bidirectional=lambda_ot_backward > 0,
             )
 
     def update_teacher_group_reps(self, new_group_reps: torch.Tensor, momentum: float = 0.99):
@@ -710,18 +691,17 @@ class DistillationLoss(nn.Module):
         # 3. MOT-FD: OT Alignment + Monotonic Regularization
         # ================================================================
         if self.ot_loss_fn is not None and len(student_hidden_states) > 0:
-            ot_loss, ot_backward_loss, mono_loss, _, __ = self.ot_loss_fn(
+            projected_group_reps = self.ot_projector(
+                self.teacher_group_reps  # type: ignore[arg-type]
+            )  # [G, D_student]
+            ot_loss, mono_loss, _, __ = self.ot_loss_fn(
                 student_hidden_states=student_hidden_states,
-                teacher_group_reps=self.teacher_group_reps,  # type: ignore[arg-type]
+                teacher_group_reps=projected_group_reps,
                 valid_mask=valid_mask,
             )
             breakdown["ot"] = ot_loss
             breakdown["mono"] = mono_loss
             total = total + self.lambda_ot * ot_loss + self.lambda_mono * mono_loss
-            
-            if self.lambda_ot_backward > 0:
-                breakdown["ot_backward"] = ot_backward_loss
-                total = total + self.lambda_ot_backward * ot_backward_loss
         elif teacher_hidden_states is not None:
             # ============================================================
             # Legacy QAT mode: hidden-state cosine loss

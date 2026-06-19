@@ -50,7 +50,7 @@ class TrainingConfig(BaseModel):
     save_steps: int = Field(default=500, ge=1)
     eval_steps: int = Field(default=500, ge=1)
     logging_steps: int = Field(default=10, ge=1)
-    save_total_limit: int = Field(default=3, ge=1)
+    save_total_limit: int = Field(default=3, ge=0)
     seed: int = 42
     optimizer: OptimizerConfig = OptimizerConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
@@ -97,7 +97,6 @@ class DistillConfig(BaseModel):
     # ---- OT-specific weights ----
     lambda_ot: float = Field(default=1.0, ge=0.0)
     lambda_mono: float = Field(default=0.1, ge=0.0)
-    lambda_ot_backward: float = Field(default=0.5, ge=0.0)  # bidirectional alignment
 
     # ---- Temperature / hyperparams ----
     kd_temperature: float = Field(default=2.0, gt=0.0)
@@ -110,10 +109,25 @@ class DistillConfig(BaseModel):
     adaptive_temp_max: float = Field(default=0.5, gt=0.0)
     adaptive_temp_scale: float = Field(default=1.0, ge=0.0)
 
+    # ---- Attention distillation ----
+    attn_distill_strategy: Literal["kl", "cosine", "mse", "ot"] = "kl"
+    attn_ot_temperature: float = Field(default=0.1, gt=0.0)
+    attn_sinkhorn_iters: int = Field(default=50, ge=1)
+
     # ---- Dynamic functional groups ----
     dynamic_groups: bool = Field(default=False)
     dynamic_groups_update_interval: int = Field(default=500, ge=1)
     dynamic_groups_momentum: float = Field(default=0.99, ge=0.0, le=1.0)
+
+    # ---- Memory optimizations ----
+    teacher_load_in_8bit: bool = False
+    teacher_load_in_4bit: bool = False
+
+    @model_validator(mode="after")
+    def _exclusive_teacher_quant(self) -> "DistillConfig":
+        if self.teacher_load_in_8bit and self.teacher_load_in_4bit:
+            raise ValueError("teacher_load_in_8bit and teacher_load_in_4bit are mutually exclusive.")
+        return self
 
     # ---- Training ----
     freeze_embedding: bool = False
@@ -176,7 +190,7 @@ class QATConfig(BaseModel):
     beta_kd: float = Field(default=1.0, ge=0.0)
     gamma_hidden: float = Field(default=0.5, ge=0.0)
     kd_temperature: float = Field(default=2.0, gt=0.0)
-    export_format: Literal["safetensors", "onnx", "gguf"] = "safetensors"
+    export_format: Literal["safetensors", "onnx"] = "safetensors"
     data: DataConfig
     training: TrainingConfig
 

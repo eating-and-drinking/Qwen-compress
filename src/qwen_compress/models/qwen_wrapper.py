@@ -73,6 +73,8 @@ def load_qwen_model(
     trust_remote_code: bool = True,
     attn_implementation: Optional[str] = None,
     gradient_checkpointing: bool = False,
+    load_in_8bit: bool = False,
+    load_in_4bit: bool = False,
 ) -> nn.Module:
     """Load a Qwen causal-LM model.
 
@@ -82,6 +84,7 @@ def load_qwen_model(
         HuggingFace repo id or local path.
     dtype:
         Computation dtype (``"bf16"``, ``"fp16"``, ``"fp32"`` or a ``torch.dtype``).
+        Ignored when ``load_in_8bit`` or ``load_in_4bit`` is True.
     device_map:
         Passed straight to ``transformers``. Use ``"auto"`` for multi-GPU shards.
     trust_remote_code:
@@ -90,18 +93,56 @@ def load_qwen_model(
         ``"sdpa"``, ``"flash_attention_2"``, or ``"eager"``. ``None`` lets HF choose.
     gradient_checkpointing:
         Enable activation checkpointing on the loaded model.
+    load_in_8bit:
+        Load weights in INT8 via bitsandbytes (LLM.int8()). Recommended for a
+        frozen teacher on a 48 GB GPU: reduces teacher footprint from ~29 GB
+        (BF16) to ~15 GB with negligible effect on logits / hidden states.
+        Requires ``bitsandbytes`` to be installed.
+    load_in_4bit:
+        Load weights in NF4 via bitsandbytes (QLoRA-style). Reduces teacher
+        footprint to ~7 GB. Higher quantization error than INT8; use only when
+        VRAM is very constrained (< 40 GB for 14B→3B).
+        Requires ``bitsandbytes`` to be installed.
     """
+    if load_in_8bit and load_in_4bit:
+        raise ValueError("load_in_8bit and load_in_4bit are mutually exclusive.")
+
     torch_dtype = _resolve_dtype(dtype)
-    kwargs: Dict[str, object] = {
-        "torch_dtype": torch_dtype,
-        "trust_remote_code": trust_remote_code,
-    }
-    if device_map is not None:
-        kwargs["device_map"] = device_map
+    kwargs: Dict[str, object] = {"trust_remote_code": trust_remote_code}
+
+    if load_in_8bit or load_in_4bit:
+        # bitsandbytes quantization — torch_dtype is set inside the BnB config
+        try:
+            from transformers import BitsAndBytesConfig
+        except ImportError as e:
+            raise ImportError(
+                "bitsandbytes is required for INT8/INT4 loading. "
+                "Install it with: pip install bitsandbytes"
+            ) from e
+
+        if load_in_8bit:
+            kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+            _logger.info(f"Loading Qwen model from {name_or_path} (INT8 via bitsandbytes)")
+        else:
+            kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch_dtype or torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+            _logger.info(f"Loading Qwen model from {name_or_path} (NF4 via bitsandbytes)")
+        # device_map must be set for bitsandbytes multi-device loading
+        kwargs["device_map"] = device_map if device_map is not None else "auto"
+    else:
+        if torch_dtype is not None:
+            kwargs["torch_dtype"] = torch_dtype
+        if device_map is not None:
+            kwargs["device_map"] = device_map
+        _logger.info(f"Loading Qwen model from {name_or_path} (dtype={dtype})")
+
     if attn_implementation is not None:
         kwargs["attn_implementation"] = attn_implementation
 
-    _logger.info(f"Loading Qwen model from {name_or_path} (dtype={dtype})")
     model = AutoModelForCausalLM.from_pretrained(str(name_or_path), **kwargs)
 
     if gradient_checkpointing:

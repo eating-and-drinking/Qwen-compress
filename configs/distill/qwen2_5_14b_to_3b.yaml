@@ -7,13 +7,15 @@
 #   - Alignment: Sinkhorn optimal transport with monotonic constraint
 #   - Loss: L = α·CE + β·KD + λ_ot·L_OT + λ_mono·L_mono
 #
-# Hardware target: 8x A100 80GB (teacher sharded with device_map=auto, student on cuda:0).
-# Adjust gradient_accumulation_steps for smaller setups.
+# Hardware target: 1x GPU with 48 GB VRAM (e.g. A6000 / A100-40 / RTX 6000 Ada).
+# Teacher is loaded in INT8 via bitsandbytes (~15 GB) so the 14B teacher +
+# 3B student + 8-bit Adam + activations fits within ~33 GB.
+# For 80 GB GPUs: set teacher_load_in_8bit: false and increase batch_size.
 
 stage: distill
 
-teacher_model_name_or_path: Qwen/Qwen2.5-14B-Instruct
-student_model_name_or_path: Qwen/Qwen2.5-3B
+teacher_model_name_or_path: ./models/Qwen2.5-14B-Instruct
+student_model_name_or_path: ./models/Qwen2.5-3B
 
 # ---- Functional Decomposition (48 → 12 groups) ----
 num_groups: 12
@@ -24,14 +26,13 @@ energy_gamma: 0.3                 # γ: cosine-distance weight
 min_peak_distance: 2              # minimum gap between breakpoints
 
 # ---- MOT-FD Composite Loss Weights ----
-# L = α·L_CE + β·L_KD + λ_ot·L_OT + λ_backward·L_OT_backward + λ_mono·L_mono + δ·L_attn
+# L = α·L_CE + β·L_KD + λ_ot·L_OT + λ_mono·L_mono + δ·L_attn
 alpha_ce: 1.0                     # CE weight
 beta_kd: 1.0                      # KD (KL divergence) weight
 gamma_hidden: 0.0                 # legacy hidden cosine (0 = disabled)
 delta_attn: 0.0                   # attention distillation weight (0 = disabled)
 lambda_ot: 1.0                    # OT alignment weight (student→teacher)
 lambda_mono: 0.1                  # monotonic regularization weight
-lambda_ot_backward: 0.0           # backward OT weight (teacher→student), 0 = disabled
 
 # ---- Temperature / Hyperparameters ----
 kd_temperature: 2.0               # KD softmax temperature
@@ -54,15 +55,19 @@ dynamic_groups: false             # enable dynamic group updates
 dynamic_groups_update_interval: 500  # update interval in steps
 dynamic_groups_momentum: 0.99     # momentum for smooth updates
 
+# ---- Memory optimizations ----
+teacher_load_in_8bit: true         # INT8 teacher: ~15 GB vs 29 GB (BF16)
+teacher_load_in_4bit: false        # NF4 fallback (~7 GB) if still OOM
+
 freeze_embedding: false
 projector_lr_multiplier: 0.1      # projector LR = base LR × this value
 
 data:
   train_path: ./data/cot_sft_train.jsonl
   eval_path: ./data/cot_eval.jsonl
-  max_seq_length: 4096
-  batch_size: 2
-  gradient_accumulation_steps: 16   # effective batch = 32
+  max_seq_length: 2048             # 4096 → 2048 saves ~6 GB activation memory
+  batch_size: 1                    # 2 → 1; effective batch kept via grad_accum
+  gradient_accumulation_steps: 32  # effective batch = 32 (same as before)
   num_workers: 4
   shuffle_seed: 42
   cot_mode: dual                    # alternate direct / CoT outputs
@@ -81,7 +86,7 @@ training:
   save_total_limit: 3
   seed: 42
   optimizer:
-    name: adamw
+    name: adamw_8bit              # 8-bit Adam: ~3 GB vs 25 GB (fp32 Adam)
     lr: 1.0e-4
     betas: [0.9, 0.95]
     weight_decay: 0.01

@@ -26,7 +26,7 @@ from typing import Dict, Iterator, List, Optional
 
 import torch
 from torch import nn
-from torch.optim import AdamW
+from torch.optim import AdamW as TorchAdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
@@ -74,35 +74,6 @@ class _LayerOutputCapture:
             self._handle.remove()
             self._handle = None
         self.last_output = None
-
-
-class _AttentionCapture:
-    """Forward hook that captures attention weights from a decoder layer."""
-
-    def __init__(self) -> None:
-        self.last_attention: Optional[torch.Tensor] = None
-        self._handle: Optional[torch.utils.hooks.RemovableHandle] = None
-
-    def attach(self, layer: nn.Module) -> None:
-        if self._handle is not None:
-            raise RuntimeError("Hook already attached.")
-
-        def _hook(_mod, _inp, out):  # noqa: ANN001
-            if isinstance(out, tuple):
-                if len(out) > 1 and isinstance(out[1], dict) and 'attentions' in out[1]:
-                    self.last_attention = out[1]['attentions']
-                elif hasattr(out[0], 'attentions'):
-                    self.last_attention = out[0].attentions
-            elif hasattr(out, 'attentions'):
-                self.last_attention = out.attentions
-
-        self._handle = layer.register_forward_hook(_hook)
-
-    def detach(self) -> None:
-        if self._handle is not None:
-            self._handle.remove()
-            self._handle = None
-        self.last_attention = None
 
 
 # ============================================================================
@@ -166,6 +137,8 @@ class GroupwiseDistillTrainer:
             dtype=dtype,
             device_map="auto",
             attn_implementation="sdpa",
+            load_in_8bit=config.teacher_load_in_8bit,
+            load_in_4bit=config.teacher_load_in_4bit,
         )
         self.teacher.eval()
         for p in self.teacher.parameters():
@@ -210,23 +183,21 @@ class GroupwiseDistillTrainer:
             delta_attn=config.delta_attn,
             lambda_ot=config.lambda_ot,
             lambda_mono=config.lambda_mono,
-            lambda_ot_backward=getattr(config, 'lambda_ot_backward', 0.0),
             kd_temperature=config.kd_temperature,
             ot_temperature=config.ot_temperature,
             sinkhorn_iters=config.sinkhorn_iters,
-            adaptive_ot_temp=getattr(config, 'adaptive_ot_temp', False),
-            adaptive_temp_min=getattr(config, 'adaptive_temp_min', 0.05),
-            adaptive_temp_max=getattr(config, 'adaptive_temp_max', 0.5),
-            adaptive_temp_scale=getattr(config, 'adaptive_temp_scale', 1.0),
-            attn_distill_strategy=getattr(config, 'attn_distill_strategy', 'kl'),
-            attn_ot_temperature=getattr(config, 'attn_ot_temperature', 0.1),
-            attn_sinkhorn_iters=getattr(config, 'attn_sinkhorn_iters', 50),
+            adaptive_ot_temp=config.adaptive_ot_temp,
+            adaptive_temp_min=config.adaptive_temp_min,
+            adaptive_temp_max=config.adaptive_temp_max,
+            adaptive_temp_scale=config.adaptive_temp_scale,
+            attn_distill_strategy=config.attn_distill_strategy,
+            attn_ot_temperature=config.attn_ot_temperature,
+            attn_sinkhorn_iters=config.attn_sinkhorn_iters,
         )
         self.loss_fn.to(next(self.student.parameters()).device)
 
-        # ---- Hooks: capture student hidden states and attention ----------
+        # ---- Hooks: capture student hidden states -----------------------
         self._student_captures: List[_LayerOutputCapture] = []
-        self._student_attn_captures: List[_AttentionCapture] = []
         self._attach_student_hooks()
 
         # ---- Data --------------------------------------------------------
@@ -280,13 +251,32 @@ class GroupwiseDistillTrainer:
             {"params": student_params, "lr": opt.lr},
             {"params": projector_params, "lr": opt.lr * projector_lr},
         ]
-        self.optimizer = AdamW(
-            param_groups,
+        _optim_kwargs = dict(
             lr=opt.lr,
             betas=opt.betas,
             eps=opt.eps,
             weight_decay=opt.weight_decay,
         )
+        if opt.name == "adamw_8bit":
+            try:
+                import bitsandbytes as bnb
+                self.optimizer = bnb.optim.AdamW8bit(param_groups, **_optim_kwargs)
+                _logger.info("Using 8-bit AdamW (bitsandbytes)")
+            except ImportError as e:
+                raise ImportError(
+                    "adamw_8bit requires bitsandbytes: pip install bitsandbytes"
+                ) from e
+        elif opt.name == "lion":
+            try:
+                import bitsandbytes as bnb
+                self.optimizer = bnb.optim.Lion(param_groups, lr=opt.lr, weight_decay=opt.weight_decay)
+                _logger.info("Using Lion optimizer (bitsandbytes)")
+            except ImportError as e:
+                raise ImportError(
+                    "lion requires bitsandbytes: pip install bitsandbytes"
+                ) from e
+        else:
+            self.optimizer = TorchAdamW(param_groups, **_optim_kwargs)
 
         steps_per_epoch = max(1, len(self.train_loader) // config.data.gradient_accumulation_steps)
         if config.training.max_steps > 0:
@@ -421,26 +411,18 @@ class GroupwiseDistillTrainer:
     # ======================================================================
 
     def _attach_student_hooks(self) -> None:
-        """Register hooks on ALL student decoder layers to capture hidden states and attentions."""
+        """Register hooks on ALL student decoder layers to capture hidden states."""
         s_layers = get_decoder_layers(self.student)
         for layer in s_layers:
             cap = _LayerOutputCapture()
             cap.attach(layer)
             self._student_captures.append(cap)
-            if self.config.delta_attn > 0:
-                attn_cap = _AttentionCapture()
-                attn_cap.attach(layer)
-                self._student_attn_captures.append(attn_cap)
-        _logger.info(f"Attached hooks to {len(self._student_captures)} student layers "
-                   f"({len(self._student_attn_captures)} attention hooks.")
+        _logger.info(f"Attached hooks to {len(self._student_captures)} student layers.")
 
     def _detach_hooks(self) -> None:
         for cap in self._student_captures:
             cap.detach()
         self._student_captures.clear()
-        for cap in getattr(self, '_student_attn_captures', []):
-            cap.detach()
-        self._student_attn_captures.clear()
 
     # ======================================================================
     # Dynamic groups helpers
@@ -657,9 +639,9 @@ class GroupwiseDistillTrainer:
         best_val_loss: Optional[float] = None
         best_step: int = 0
 
-        dynamic_groups_enabled = getattr(cfg, 'dynamic_groups', False)
-        dynamic_update_interval = getattr(cfg, 'dynamic_groups_update_interval', 500)
-        dynamic_momentum = getattr(cfg, 'dynamic_groups_momentum', 0.99)
+        dynamic_groups_enabled = cfg.dynamic_groups
+        dynamic_update_interval = cfg.dynamic_groups_update_interval
+        dynamic_momentum = cfg.dynamic_groups_momentum
 
         # Track running teacher layer reps for dynamic groups
         running_teacher_layer_reps = None

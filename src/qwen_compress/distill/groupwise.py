@@ -67,6 +67,11 @@ class GroupAssignment:
         return list(zip(self.teacher_anchor_layers, self.student_target_layers))
 
 
+def _minmax_normalize(x: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Normalize tensor to [0, 1] via min-max scaling."""
+    return (x - x.min()) / (x.max() - x.min() + eps)
+
+
 def compute_energy_signal(
     layer_reps: torch.Tensor,
     alpha: float = 1.0,
@@ -75,7 +80,11 @@ def compute_energy_signal(
 ) -> torch.Tensor:
     """Compute representation dynamics energy.
 
-    E(l) = α·||z_{l+1} - z_l|| + β·||z_{l+1} - 2z_l + z_{l-1}|| + γ·(1 - cos(z_{l+1}, z_l))
+    E(l) = α·norm(Δ¹_l) + β·norm(Δ²_l) + γ·norm(cosine_dist_l)
+
+    Each component is min-max normalized to [0, 1] before weighting so that
+    α, β, γ are pure contribution weights regardless of the raw scale of each
+    term (L2 norms vs cosine distances have different magnitudes).
 
     Parameters
     ----------
@@ -113,7 +122,12 @@ def compute_energy_signal(
     )
     cosine_dist = 1.0 - cos_sim  # [L-1]
 
-    energy = alpha * first_order + beta * second_order + gamma * cosine_dist
+    # Normalize each component to [0, 1] so α/β/γ are dimensionless weights.
+    energy = (
+        alpha * _minmax_normalize(first_order)
+        + beta * _minmax_normalize(second_order)
+        + gamma * _minmax_normalize(cosine_dist)
+    )
     return energy
 
 
@@ -140,7 +154,7 @@ def detect_breakpoints(
     -------
     Sorted list of breakpoint indices (1-indexed layer positions).
     """
-    energy_np = energy.detach().cpu().numpy()
+    energy_np = energy.detach().cpu().float().numpy()
     L = len(energy_np)
 
     # Find local maxima

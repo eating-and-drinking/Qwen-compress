@@ -80,12 +80,15 @@ runs/
 # Datasets (large files)
 data/raw/
 data/processed/
+*.jsonl
 *.jsonl.gz
 *.parquet
 
+# Model weights & downloaded models
+models/
+
 # Jupyter
 .ipynb_checkpoints
-*.ipynb
 
 # Documentation builds
 docs/_build/
