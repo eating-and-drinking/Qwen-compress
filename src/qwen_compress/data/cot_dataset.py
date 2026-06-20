@@ -40,6 +40,13 @@ _logger = get_logger(__name__)
 COT_OPEN = "<think>"
 COT_CLOSE = "</think>"
 
+# Control tokens (Qwen3 convention) appended to the user turn so the model can
+# tell which behaviour is expected from an otherwise identical prompt. Without
+# this signal, ``dual`` training feeds identical inputs for both the bare-answer
+# and the CoT target, collapsing the two output distributions.
+THINK_HINT = "/think"        # -> produce <think>...</think> then the answer
+NOTHINK_HINT = "/no_think"   # -> answer directly, no reasoning tokens
+
 
 def _read_jsonl(path: Union[str, Path]) -> List[Dict[str, Any]]:
     """Read a (possibly large) JSONL file into memory."""
@@ -48,16 +55,26 @@ def _read_jsonl(path: Union[str, Path]) -> List[Dict[str, Any]]:
         return [json.loads(line) for line in fp if line.strip()]
 
 
-def _format_prompt(example: Dict[str, Any]) -> str:
-    """Render the input side using Qwen chat-style markers."""
+def _format_prompt(
+    example: Dict[str, Any], mode: Literal["direct", "cot"]
+) -> str:
+    """Render the input side using Qwen chat-style markers.
+
+    The ``mode`` control token is appended to the user turn so the same question
+    yields a distinct prompt for direct vs. CoT supervision (see ``THINK_HINT``).
+    """
     instruction = example["instruction"]
     user_input = example.get("input", "").strip()
     if user_input:
         user_msg = f"{instruction}\n\n{user_input}"
     else:
         user_msg = instruction
+    hint = THINK_HINT if mode == "cot" else NOTHINK_HINT
     return (
-        f"<|im_start|>user\n{user_msg}<|im_end|>\n"
+        # System block matches the default injected by the deployed chat template
+        # (chat_template.jinja) so the training prompt is identical to inference.
+        f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+        f"<|im_start|>user\n{user_msg} {hint}<|im_end|>\n"
         f"<|im_start|>assistant\n"
     )
 
@@ -125,7 +142,7 @@ class CoTDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         ex = self.examples[idx]
         mode = self._pick_mode(idx)
-        prompt = _format_prompt(ex)
+        prompt = _format_prompt(ex, mode)
         target = _format_target(ex, mode)
 
         prompt_ids = self.tokenizer(prompt, add_special_tokens=False).input_ids

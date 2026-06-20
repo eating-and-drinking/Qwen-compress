@@ -74,14 +74,14 @@ data:
 
 training:
   output_dir: ./checkpoints/distill
-  num_train_epochs: 3.0
+  num_train_epochs: 10.0           # base student learns format+reasoning from scratch; 3 epochs (~700 steps) underfits
   max_steps: -1
   gradient_checkpointing: true
   max_grad_norm: 1.0
   bf16: true
   fp16: false
-  save_steps: 500
-  eval_steps: 500
+  save_steps: 200                  # more checkpoints to catch the real best / spot overfit
+  eval_steps: 200
   logging_steps: 10
   save_total_limit: 3
   seed: 42
@@ -93,5 +93,5 @@ training:
     eps: 1.0e-8
   scheduler:
     name: cosine_with_warmup
-    warmup_ratio: 0.03
+    warmup_ratio: 0.05               # longer warmup for cold-start base student
     min_lr_ratio: 0.1
